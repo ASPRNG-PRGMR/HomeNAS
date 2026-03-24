@@ -142,7 +142,3 @@ nas-stack/
 ```
 
 ---
-
-## License
-
-MIT
