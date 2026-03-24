@@ -29,58 +29,20 @@ A lightweight self-hosted NAS (Network Attached Storage) running on an old lapto
 git clone https://github.com/yourname/nas-stack
 cd nas-stack
 
-# 2. Edit config before anything else
-nano nas_main/config.json
-# Set: jwt_secret, admin_username, admin_password, nas_root
+# 2. Run setup.sh
+installs all the dependencies required 
 
-# 3. Build the backend
-cd nas_main/build
-cmake .. -GNinja
-sudo ninja
+# 3. Run startup.sh
+starts all the services required 
+# Note: In case you want all the services to be enabled instead, run below command and then run the startup file
+# sed -i 's/start/enable/g' startup.sh
 
-# 4. Create required directories
-mkdir -p ~/nas/nas_main/logs
-mkdir -p ~/nas/nas_main/tmp_uploads
-mkdir -p ~/nas/nas_storage
-
-# 5. Install NGINX config
-sudo cp nginx/nas.conf /etc/nginx/conf.d/nas.conf
-
-# 6. Copy webui to a SELinux-friendly location
-sudo mkdir -p /opt/nas/webui
-sudo cp -r nas_main/webui/* /opt/nas/webui/
-sudo chcon -R -t httpd_sys_content_t /opt/nas/webui/
-
-# 7. Generate TLS cert
-sudo mkdir -p /etc/ssl/nas
-sudo openssl req -x509 -nodes -newkey rsa:4096 -days 3650 \
-    -keyout /etc/ssl/nas/key.pem \
-    -out /etc/ssl/nas/cert.pem \
-    -subj "/CN=nas.local"
-
-# 8. Open firewall ports
-sudo firewall-cmd --permanent --add-service=https
-sudo firewall-cmd --permanent --add-service=http
-sudo firewall-cmd --reload
-
-# 9. SELinux — allow NGINX to proxy to backend
-sudo setsebool -P httpd_can_network_relay 1
-sudo setsebool -P httpd_can_network_connect 1
-
-# 10. Start NGINX
-sudo systemctl enable --now nginx
-
-# 11. Install and start the backend service
-sudo cp systemd/nas-backend.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now nas-backend
-
-# 12. Connect Tailscale
+# 4. Connect Tailscale
 sudo systemctl enable --now tailscaled
 sudo tailscale up
 # Follow the URL it prints to authenticate
 
-# 13. Get your Tailscale IP
+# 5. Get your Tailscale IP
 tailscale ip -4
 ```
 
