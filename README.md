@@ -4,6 +4,18 @@ A lightweight self-hosted NAS (Network Attached Storage) running on an old lapto
 
 ---
 
+## Features
+
+- Remote file access over Tailscale
+- Upload and download files from browser
+- Folder creation, deletion, and file management
+- JWT-based authentication
+- NGINX reverse proxy with HTTPS
+- systemd service integration for persistence
+- Lightweight frontend with no framework dependency
+
+---
+
 ## What's inside
 
 - **Drogon (C++)** — high performance backend handling auth, file listing, uploads and downloads
@@ -25,24 +37,21 @@ A lightweight self-hosted NAS (Network Attached Storage) running on an old lapto
 ### Steps
 
 ```bash
-# 1. Clone the repo
-git clone https://github.com/yourname/nas-stack
-cd nas-stack
+# 1. Update your system
+sudo dnf update && sudo dnf upgrade -y
 
-# 2. Run setup.sh
-installs all the dependencies required 
+# 2. Clone the repo
+git clone https://github.com/ASPRNG-PRGMR/HomeNAS.git
+cd HomeNAS
 
-# 3. Run startup.sh
-starts all the services required 
-# Note: In case you want all the services to be enabled instead, run below command and then run the startup file
-# sed -i 's/start/enable/g' startup.sh
+# 3. Run setup
+./setup.sh
 
-# 4. Connect Tailscale
-sudo systemctl enable --now tailscaled
-sudo tailscale up
-# Follow the URL it prints to authenticate
+# 4. Start services
+./startup.sh
 
-# 5. Get your Tailscale IP
+# 5. Authenticate Tailscale when prompted
+# Then get your Tailscale IP
 tailscale ip -4
 ```
 
@@ -78,10 +87,11 @@ The systemd service file includes `ProtectHome=false`. This is intentional — b
 **If you are deploying this more seriously** (shared machine, multiple users, or exposing to more people than just yourself), the better practice is to move everything out of your home directory:
 
 ```bash
-sudo mkdir -p /opt/nas/{webui,backend/logs,backend/tmp_uploads}
-sudo mkdir -p /data/nas
-sudo useradd -r -s /sbin/nologin -d /opt/nas nas
-sudo chown -R nas:nas /opt/nas /data/nas
+# Run the below commands - change custom_user with whatever username you desire and custom_path with the path where you wish to move the installation
+sed -i "s|/home/\${USER}|<custom_path>|g" setup.sh
+sed -i "s/\${USER}/{custom_user>/g" setup.sh
+
+# Now run the setup.sh file again, it will install the files in the desired path with the desired user
 ```
 
 Then set `ProtectHome=true` in the service file and update all paths in `config.json` accordingly. This isolates the backend process so it has no visibility into any user's home directory.
@@ -92,7 +102,7 @@ Either way works — the tradeoff is convenience vs isolation.
 
 Fedora's SELinux will block NGINX from serving files that aren't labeled `httpd_sys_content_t`. Files under `/home` on some Fedora setups are on a filesystem that doesn't support xattr labels, which means `chcon` will fail with "can't apply partial context to unlabeled file".
 
-The fix is to serve the webui from `/opt/nas/webui/` instead, which is on the root filesystem and supports SELinux labels properly. The backend can still run from anywhere.
+The fix is to serve the webui from `/{installation path}/nas/nas_main/webui/` instead, which is on the root filesystem and supports SELinux labels properly. The backend can still run from anywhere.
 
 ### Self-signed certificate warning
 
@@ -106,7 +116,7 @@ The HTTP upload works but can be slow for large files. For bulk transfers, SCP o
 
 ```bash
 # From any client on your Tailscale network
-scp largefile.mkv yourusername@100.x.x.x:/home/noobiegg/nas/nas_storage/
+scp largefile.mkv yourusername@100.x.x.x:/{installation path}/nas/nas_storage/
 ```
 
 ### Passwords
@@ -118,27 +128,32 @@ Passwords are currently stored as plaintext in `config.json`. This is fine for p
 ## Project structure
 
 ```
-nas-stack/
-├── nas_main/
-│   ├── backend/
-│   │   ├── controllers/
-│   │   │   ├── AuthController.h/cpp      — login, logout, JWT generation
-│   │   │   ├── FilesystemController.h/cpp — list, download, delete, mkdir, rename
-│   │   │   └── UploadController.h/cpp    — multipart file upload
-│   │   └── filters/
-│   │       └── JwtFilter.h/cpp           — JWT validation middleware
-│   ├── webui/
-│   │   ├── index.html                    — page structure
-│   │   ├── style.css                     — all styling
-│   │   └── app.js                        — all UI logic
-│   ├── CMakeLists.txt
-│   ├── main.cpp
-│   └── config.json                       — runtime configuration
-├── nginx/
-│   └── nas.conf                          — reverse proxy + TLS
-├── systemd/
-│   └── nas-backend.service               — service definition
-└── README.md
+HomeNAS-main/
+│
+├── backend/
+│   ├── controllers/
+│   │   ├── AuthController.h/cpp         — login, logout, JWT generation
+│   │   ├── FilesystemController.h/cpp   — list, download, delete, mkdir, rename
+│   │   └── UploadController.h/cpp       — multipart file upload
+│   ├── filters/  
+│   │    └── JwtFilter.h/cpp              — JWT validation middleware
+│   ├── CMakeLists.txt   
+│   ├── main.cpp   
+│   └── config.json                          — runtime configuration
+│
+├── webui/   
+│   ├── index.html                       — page structure
+│   ├── style.css                        — all styling
+│   └── app.js                           — all UI logic
+|
+│                       
+├── nginx/   
+│   └── nas.conf                         — reverse proxy + TLS
+│
+├── systemd
+│   └── nas-backend.service              — service definition
+│
+└── README.md   
 ```
 
 ---
