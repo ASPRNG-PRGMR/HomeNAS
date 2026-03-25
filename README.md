@@ -87,7 +87,8 @@ The systemd service file includes `ProtectHome=false`. This is intentional — b
 **If you are deploying this more seriously** (shared machine, multiple users, or exposing to more people than just yourself), the better practice is to move everything out of your home directory:
 
 ```bash
-# Run the below commands - change custom_user with whatever username you desire and custom_path with the path where you wish to move the installation
+# Run the below commands
+# Change custom_user to the username you desire and custom_path to the full path where you want the files to be installed.
 sed -i "s|/home/\${USER}|<custom_path>|g" setup.sh
 sed -i "s/\${USER}/{custom_user>/g" setup.sh
 
@@ -132,26 +133,25 @@ HomeNAS-main/
 │
 ├── backend/
 │   ├── controllers/
-│   │   ├── AuthController.h/cpp         — login, logout, JWT generation
-│   │   ├── FilesystemController.h/cpp   — list, download, delete, mkdir, rename
-│   │   └── UploadController.h/cpp       — multipart file upload
+│   │   ├── AuthController.h/cpp           — login, logout, JWT generation
+│   │   ├── FilesystemController.h/cpp     — list, download, delete, mkdir, rename
+│   │   └── UploadController.h/cpp         — multipart file upload
 │   ├── filters/  
-│   │    └── JwtFilter.h/cpp              — JWT validation middleware
+│   │    └── JwtFilter.h/cpp               — JWT validation middleware
 │   ├── CMakeLists.txt   
 │   ├── main.cpp   
-│   └── config.json                          — runtime configuration
+│   └── config.json                        — runtime configuration
 │
 ├── webui/   
-│   ├── index.html                       — page structure
-│   ├── style.css                        — all styling
-│   └── app.js                           — all UI logic
-|
-│                       
+│   ├── index.html                         — page structure
+│   ├── style.css                          — all styling
+│   └── app.js                             — all UI logic
+|              
 ├── nginx/   
-│   └── nas.conf                         — reverse proxy + TLS
+│   └── nas.conf                           — reverse proxy + TLS
 │
 ├── systemd
-│   └── nas-backend.service              — service definition
+│   └── nas-backend.service                — service definition
 │
 └── README.md   
 ```
