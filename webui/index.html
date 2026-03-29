@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NAS</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- Login screen -->
+  <div id="login-screen" class="screen">
+    <div class="login-box">
+      <div class="login-logo">NAS</div>
+      <input id="login-user" type="text"     placeholder="Username" autocomplete="username">
+      <input id="login-pass" type="password" placeholder="Password" autocomplete="current-password">
+      <button id="login-btn">Sign in</button>
+      <p id="login-error" class="error hidden"></p>
+    </div>
+  </div>
+
+  <!-- Main app -->
+  <div id="app-screen" class="screen hidden">
+    <header>
+      <nav id="breadcrumb"></nav>
+      <div class="header-actions">
+        <button id="new-folder-btn" class="icon-btn" title="New folder">&#43; Folder</button>
+        <button id="upload-btn"     class="icon-btn" title="Upload files">&#8593; Upload</button>
+        <button id="logout-btn"     class="icon-btn ghost">Sign out</button>
+      </div>
+    </header>
+
+    <!-- Drop zone overlay -->
+    <div id="drop-overlay" class="hidden">Drop files to upload</div>
+
+    <!-- File list -->
+    <main id="file-list"></main>
+
+    <!-- Upload progress -->
+    <div id="upload-bar" class="hidden">
+      <div id="upload-progress"></div>
+      <span id="upload-label"></span>
+    </div>
+
+    <!-- Hidden file input -->
+    <input type="file" id="file-input" multiple style="display:none">
+  </div>
+
+  <!-- Rename modal -->
+  <div id="modal-overlay" class="hidden">
+    <div class="modal">
+      <p id="modal-title">Rename</p>
+      <input id="modal-input" type="text">
+      <div class="modal-btns">
+        <button id="modal-cancel">Cancel</button>
+        <button id="modal-ok">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

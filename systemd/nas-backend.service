@@ -1,0 +1,25 @@
+[Unit]	
+Description=NAS Backend (Drogon)
+After=network.target
+
+[Service]
+Type=simple
+User=_user_
+Group=_user_
+WorkingDirectory=_home_/nas/nas_main 
+ExecStart=_home_/nas/nas_main/nas_backend
+Restart=on-failure
+RestartSec=5s
+
+# Resource limits
+LimitNOFILE=65536
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=false
+ReadWritePaths=_home_/nas/nas_storage _home_/nas/nas_main/logs _home_/nas/nas_main/tmp_uploads
+
+[Install]
+WantedBy=multi-user.target

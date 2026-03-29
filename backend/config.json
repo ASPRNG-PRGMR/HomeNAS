@@ -1,0 +1,26 @@
+{
+  "listeners": [
+    {
+      "address": "127.0.0.1",
+      "port": 8080,
+      "https": false
+    }
+  ],
+  "app": {
+    "threads_num": 4,
+    "log_path": "home_path/nas/nas_main/logs",
+    "log_level": "INFO",
+    "upload_path": "home_path/nas/nas_main/tmp_uploads",
+    "run_as_daemon": false,
+    "reuse_port": false,
+    "home_page": "index.html",
+    "max_connection_num": 100000
+  },
+  "custom_config": {
+    "nas_root": "home_path/nas/nas_storage",
+    "jwt_secret": "please_put_something_that_is_actually_hard_to_guess",
+    "jwt_expiry_seconds": 86400,
+    "admin_username": "admin",
+    "admin_password": "admin@change_this"
+  }
+}
