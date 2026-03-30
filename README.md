@@ -99,6 +99,46 @@ Then set `ProtectHome=true` in the service file and update all paths in `config.
 
 Either way works — the tradeoff is convenience vs isolation.
 
+### SELinux and home directory access (Fedora)
+
+If you are running this NAS from somewhere under `/home/<user>/`, SELinux may also need to be set to `disabled` on Fedora for full file browsing to work properly.
+
+This project intentionally allows browsing files under your home directory, but on Fedora, SELinux can still block the backend process from traversing and accessing parts of `/home` even if Unix file permissions and `ProtectHome=false` are set correctly. In practice, this can cause the NAS to fail to list, open, or traverse directories inside your home folder.
+
+This happens because SELinux enforces mandatory access control based on security contexts, not just normal Linux ownership/permission bits. So even if the NAS backend runs as your user, SELinux policy may still deny directory traversal or file access depending on how the process and files are labeled.
+
+If you want this setup to work cleanly for personal use directly from your home directory, you may need to disable SELinux:
+
+```bash
+# Check current SELinux mode
+getenforce
+
+# Temporarily disable until reboot
+sudo setenforce 0
+```
+
+To disable it permanently:
+
+```bash
+sudo nano /etc/selinux/config
+```
+
+Change:
+
+```
+SELINUX=enforcing
+```
+
+to:
+
+```
+SELINUX=disabled
+```
+
+Then reboot.
+
+> **Important:** Disabling SELinux reduces system isolation and is not recommended for hardened or multi-user deployments. If you want to keep SELinux enabled, the better approach is to move the NAS storage outside `/home` (for example under `/srv` or `/opt`) and configure the proper SELinux contexts for that location instead.
+
 ### SELinux and the webui
 
 Fedora's SELinux will block NGINX from serving files that aren't labeled `httpd_sys_content_t`. Files under `/home` on some Fedora setups are on a filesystem that doesn't support xattr labels, which means `chcon` will fail with "can't apply partial context to unlabeled file".
