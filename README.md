@@ -26,6 +26,39 @@ A lightweight self-hosted NAS (Network Attached Storage) running on an old lapto
 
 ---
 
+## Project structure
+
+```
+HomeNAS-main/
+│
+├── backend/
+│   ├── controllers/
+│   │   ├── AuthController.h/cpp           — login, logout, JWT generation
+│   │   ├── FilesystemController.h/cpp     — list, download, delete, mkdir, rename
+│   │   └── UploadController.h/cpp         — multipart file upload
+│   ├── filters/  
+│   │    └── JwtFilter.h/cpp               — JWT validation middleware
+│   ├── CMakeLists.txt   
+│   ├── main.cpp   
+│   └── config.json                        — runtime configuration
+│
+├── webui/   
+│   ├── index.html                         — page structure
+│   ├── style.css                          — all styling
+│   └── app.js                             — all UI logic
+|              
+├── nginx/   
+│   └── nas.conf                           — reverse proxy + TLS
+│
+├── systemd
+│   └── nas-backend.service                — service definition
+│
+└── README.md   
+```
+
+---
+
+
 ## Deployment
 
 ### Requirements
@@ -163,37 +196,5 @@ scp largefile.mkv yourusername@100.x.x.x:/{installation path}/nas/nas_storage/
 ### Passwords
 
 Passwords are currently stored as plaintext in `config.json`. This is fine for personal single-user use on a private Tailscale network, but if you extend this to multiple users, implement bcrypt hashing in `AuthController.cpp` before storing any passwords.
-
----
-
-## Project structure
-
-```
-HomeNAS-main/
-│
-├── backend/
-│   ├── controllers/
-│   │   ├── AuthController.h/cpp           — login, logout, JWT generation
-│   │   ├── FilesystemController.h/cpp     — list, download, delete, mkdir, rename
-│   │   └── UploadController.h/cpp         — multipart file upload
-│   ├── filters/  
-│   │    └── JwtFilter.h/cpp               — JWT validation middleware
-│   ├── CMakeLists.txt   
-│   ├── main.cpp   
-│   └── config.json                        — runtime configuration
-│
-├── webui/   
-│   ├── index.html                         — page structure
-│   ├── style.css                          — all styling
-│   └── app.js                             — all UI logic
-|              
-├── nginx/   
-│   └── nas.conf                           — reverse proxy + TLS
-│
-├── systemd
-│   └── nas-backend.service                — service definition
-│
-└── README.md   
-```
 
 ---
