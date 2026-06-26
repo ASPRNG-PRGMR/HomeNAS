@@ -1,4 +1,5 @@
 #include "AuthController.h"
+#include "../services/EventRecorder.h"
 #include <drogon/drogon.h>
 #include <json/json.h>
 #include <openssl/hmac.h>
@@ -139,11 +140,16 @@ void AuthController::login(const drogon::HttpRequestPtr &req,
     std::string cfgUser = cfg.get("admin_username", "admin").asString();
     std::string cfgPass = cfg.get("admin_password", "changeme").asString();
 
-    // Debug: log what we received vs what config says
-    LOG_INFO << "Login attempt - received user: [" << username << "] pass: [" << password << "]";
-    LOG_INFO << "Config has    - user: [" << cfgUser << "] pass: [" << cfgPass << "]";
-
     if (username != cfgUser || password != cfgPass) {
+        // actor not set: not verified — username here is just the claim
+        // claimedUser IS set: needed for BF-006 (password spraying detection
+        // across multiple IPs targeting the same username)
+        EventRecorder::emit(NasEvent(EventType::AuthLoginFailure, EventResult::Failure)
+            .withSourceIp(req->getPeerAddr().toIp())
+            .withClaimedUser(username.empty() ? std::optional<std::string>(std::nullopt)
+                                               : std::optional<std::string>(username))
+            .withFailureReason("invalid_credentials")
+            .withUserAgent(req->getHeader("User-Agent")));
         Json::Value err;
         err["error"] = "Invalid credentials";
         auto resp = drogon::HttpResponse::newHttpJsonResponse(err);
@@ -153,6 +159,12 @@ void AuthController::login(const drogon::HttpRequestPtr &req,
     }
 
     std::string token = generateJwt(username);
+
+    EventRecorder::emit(NasEvent(EventType::AuthLoginSuccess, EventResult::Success)
+        .withActor(username)
+        .withSourceIp(req->getPeerAddr().toIp())
+        .withUserAgent(req->getHeader("User-Agent")));
+
     Json::Value result;
     result["token"] = token;
     callback(drogon::HttpResponse::newHttpJsonResponse(result));
@@ -160,6 +172,13 @@ void AuthController::login(const drogon::HttpRequestPtr &req,
 
 void AuthController::logout(const drogon::HttpRequestPtr &req,
                              std::function<void(const drogon::HttpResponsePtr &)> &&callback) {
+    // Note: JWTs are stateless (per README) — this does not invalidate the
+    // token server-side, it just records that the client chose to log out.
+    // actor not set: logout isn't behind JwtFilter, identity isn't verified here
+    EventRecorder::emit(NasEvent(EventType::AuthLogout, EventResult::Success)
+        .withSourceIp(req->getPeerAddr().toIp())
+        .withUserAgent(req->getHeader("User-Agent")));
+
     Json::Value result;
     result["ok"] = true;
     callback(drogon::HttpResponse::newHttpJsonResponse(result));

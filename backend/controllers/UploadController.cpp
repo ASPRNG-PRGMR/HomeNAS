@@ -1,4 +1,5 @@
 #include "UploadController.h"
+#include "../services/EventRecorder.h"
 #include <drogon/drogon.h>
 #include <drogon/MultiPart.h>
 #include <filesystem>
@@ -10,9 +11,10 @@ void UploadController::upload(const drogon::HttpRequestPtr &req,
                                std::function<void(const drogon::HttpResponsePtr &)> &&callback) {
     std::string destRel = req->getParameter("path");
     if (destRel.empty()) destRel = "";
+    std::string actor = req->getAttributes()->get<std::string>("username");
 
     auto &cfg = drogon::app().getCustomConfig();
-    fs::path root = cfg.get("nas_root", "home_path/nas/nas_storage").asString();
+    fs::path root = cfg.get("nas_root", "/home/noobiegg/nas/nas_storage").asString();
     root = fs::weakly_canonical(root);
 
     // Strip leading slash before joining
@@ -23,6 +25,11 @@ void UploadController::upload(const drogon::HttpRequestPtr &req,
     // Path traversal guard
     auto [rootEnd, _] = std::mismatch(root.begin(), root.end(), destFull.begin());
     if (rootEnd != root.end()) {
+        EventRecorder::emit(NasEvent(EventType::FileUpload, EventResult::Failure)
+            .withActor(actor)
+            .withSourceIp(req->getPeerAddr().toIp())
+            .withTargetPath(destRel)
+            .withFailureReason("path_traversal_or_forbidden"));
         Json::Value err; err["error"] = "Forbidden path";
         auto r = drogon::HttpResponse::newHttpJsonResponse(err);
         r->setStatusCode(drogon::k403Forbidden);
@@ -57,6 +64,14 @@ void UploadController::upload(const drogon::HttpRequestPtr &req,
         fs::path dest = destFull / f.getFileName();
         f.saveAs(dest.string());
         saved.append(f.getFileName());
+
+        // One event per file, matching the granularity of every other event
+        // type (one row per filesystem object touched, not per HTTP request).
+        EventRecorder::emit(NasEvent(EventType::FileUpload, EventResult::Success)
+            .withActor(actor)
+            .withSourceIp(req->getPeerAddr().toIp())
+            .withTargetPath((fs::path(destRel) / f.getFileName()).string())
+            .withBytesTransferred((int64_t)f.fileLength()));
     }
 
     Json::Value result;

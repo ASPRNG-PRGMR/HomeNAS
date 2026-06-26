@@ -3,12 +3,12 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>NAS</title>
+  <title>HomeNAS</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
-  <!-- Login screen -->
+  <!-- ── Login screen ──────────────────────────────────── -->
   <div id="login-screen" class="screen">
     <div class="login-box">
       <div class="login-logo">NAS</div>
@@ -19,34 +19,259 @@
     </div>
   </div>
 
-  <!-- Main app -->
-  <div id="app-screen" class="screen hidden">
-    <header>
-      <nav id="breadcrumb"></nav>
-      <div class="header-actions">
-        <button id="new-folder-btn" class="icon-btn" title="New folder">&#43; Folder</button>
-        <button id="upload-btn"     class="icon-btn" title="Upload files">&#8593; Upload</button>
-        <button id="logout-btn"     class="icon-btn ghost">Sign out</button>
+  <!-- ── Authenticated shell ───────────────────────────── -->
+  <div id="auth-shell" class="hidden">
+
+    <!-- Top nav — visible across all authenticated views -->
+    <nav id="top-nav">
+      <button class="nav-tab active" data-tab="files">📁 Files</button>
+      <button class="nav-tab"        data-tab="overview">◉ Overview</button>
+      <button class="nav-tab"        data-tab="alerts">
+        ⚠ Alerts <span id="nav-alert-count" class="nav-alert-badge hidden">0</span>
+      </button>
+      <button class="nav-tab"        data-tab="events">≡ Events</button>
+      <div class="nav-spacer"></div>
+      <button id="logout-btn" class="icon-btn ghost">Sign out</button>
+    </nav>
+
+    <!-- ── Files tab ─────────────────────────────────────── -->
+    <div id="tab-files" class="tab-pane">
+      <header>
+        <nav id="breadcrumb"></nav>
+        <div class="header-actions">
+          <button id="new-folder-btn" class="icon-btn" title="New folder">+ Folder</button>
+          <button id="upload-btn"     class="icon-btn" title="Upload files">↑ Upload</button>
+        </div>
+      </header>
+
+      <div id="drop-overlay" class="hidden">Drop files to upload</div>
+      <main id="file-list"></main>
+
+      <div id="upload-bar" class="hidden">
+        <div id="upload-progress"></div>
+        <span id="upload-label"></span>
       </div>
-    </header>
 
-    <!-- Drop zone overlay -->
-    <div id="drop-overlay" class="hidden">Drop files to upload</div>
-
-    <!-- File list -->
-    <main id="file-list"></main>
-
-    <!-- Upload progress -->
-    <div id="upload-bar" class="hidden">
-      <div id="upload-progress"></div>
-      <span id="upload-label"></span>
+      <input type="file" id="file-input" multiple style="display:none">
     </div>
 
-    <!-- Hidden file input -->
-    <input type="file" id="file-input" multiple style="display:none">
-  </div>
+    <!-- ── Overview tab ──────────────────────────────────── -->
+    <div id="tab-overview" class="tab-pane hidden">
+      <div class="dash-screen">
 
-  <!-- Rename modal -->
+        <!-- Severity stat cards -->
+        <div class="stat-cards" id="overview-sev-cards">
+          <div class="stat-card" id="card-critical" data-sev="critical">
+            <div class="stat-card-label">Critical</div>
+            <div class="stat-card-value critical" id="count-critical">—</div>
+            <div class="stat-card-sub">open alerts</div>
+          </div>
+          <div class="stat-card" id="card-high" data-sev="high">
+            <div class="stat-card-label">High</div>
+            <div class="stat-card-value high" id="count-high">—</div>
+            <div class="stat-card-sub">open alerts</div>
+          </div>
+          <div class="stat-card" id="card-medium" data-sev="medium">
+            <div class="stat-card-label">Medium</div>
+            <div class="stat-card-value medium" id="count-medium">—</div>
+            <div class="stat-card-sub">open alerts</div>
+          </div>
+          <div class="stat-card" id="card-low" data-sev="low">
+            <div class="stat-card-label">Low</div>
+            <div class="stat-card-value low" id="count-low">—</div>
+            <div class="stat-card-sub">open alerts</div>
+          </div>
+        </div>
+
+        <!-- Events today + open total -->
+        <div class="stat-cards" style="margin-top:10px">
+          <div class="stat-card">
+            <div class="stat-card-label">Events Today</div>
+            <div class="stat-card-value" id="count-events-today">—</div>
+            <div class="stat-card-sub">total actions</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-card-label">Open Alerts</div>
+            <div class="stat-card-value" id="count-alerts-total">—</div>
+            <div class="stat-card-sub">require attention</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-card-label">Auth Failures</div>
+            <div class="stat-card-value" id="count-auth-failures">—</div>
+            <div class="stat-card-sub">today</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-card-label">File Deletes</div>
+            <div class="stat-card-value" id="count-deletes">—</div>
+            <div class="stat-card-sub">today</div>
+          </div>
+        </div>
+
+        <div class="overview-grid">
+
+          <!-- Recent critical/high alerts -->
+          <div class="dash-card">
+            <div class="dash-card-header">
+              <span class="dash-card-title">Recent Alerts</span>
+              <span style="font-size:11px;color:var(--muted)" id="overview-poll-indicator">
+                <span class="poll-dot"></span>live
+              </span>
+            </div>
+            <div class="dash-card-body" id="overview-recent-alerts">
+              <div class="dash-loading">Loading…</div>
+            </div>
+          </div>
+
+          <!-- Live activity feed -->
+          <div class="dash-card">
+            <div class="dash-card-header">
+              <span class="dash-card-title">Live Activity</span>
+            </div>
+            <div class="dash-card-body" id="overview-live-feed">
+              <div class="dash-loading">Loading…</div>
+            </div>
+          </div>
+
+          <!-- Top source IPs -->
+          <div class="dash-card">
+            <div class="dash-card-header">
+              <span class="dash-card-title">Top Source IPs</span>
+              <span style="font-size:11px;color:var(--muted)">today</span>
+            </div>
+            <div class="dash-card-body" id="overview-top-ips">
+              <div class="dash-loading">Loading…</div>
+            </div>
+          </div>
+
+          <!-- Top actors -->
+          <div class="dash-card">
+            <div class="dash-card-header">
+              <span class="dash-card-title">Top Actors</span>
+              <span style="font-size:11px;color:var(--muted)">today</span>
+            </div>
+            <div class="dash-card-body" id="overview-top-actors">
+              <div class="dash-loading">Loading…</div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Alerts tab ─────────────────────────────────────── -->
+    <div id="tab-alerts" class="tab-pane hidden">
+      <div class="dash-screen">
+        <div class="filters-row" id="alerts-filters">
+          <select id="af-severity">
+            <option value="">All Severities</option>
+            <option value="critical">Critical</option>
+            <option value="high">High</option>
+            <option value="medium">Medium</option>
+            <option value="low">Low</option>
+          </select>
+          <select id="af-rule">
+            <option value="">All Rules</option>
+            <option value="BF-001">BF-001</option>
+            <option value="BF-002">BF-002</option>
+            <option value="BF-003">BF-003</option>
+            <option value="BF-004">BF-004</option>
+            <option value="BF-005">BF-005</option>
+            <option value="BF-006">BF-006</option>
+            <option value="MD-001">MD-001</option>
+            <option value="MD-002">MD-002</option>
+            <option value="MD-003">MD-003</option>
+            <option value="MD-004">MD-004</option>
+            <option value="MD-005">MD-005</option>
+            <option value="MD-006">MD-006</option>
+          </select>
+          <select id="af-status">
+            <option value="">All Statuses</option>
+            <option value="open">Open</option>
+            <option value="investigating">Investigating</option>
+            <option value="dismissed">Dismissed</option>
+          </select>
+          <input type="date" id="af-from" title="From date">
+          <input type="date" id="af-to"   title="To date">
+          <button class="filter-btn" id="af-apply">Apply</button>
+          <button class="filter-btn ghost" id="af-reset">Reset</button>
+        </div>
+
+        <div id="alerts-table-wrap">
+          <table class="data-table" id="alerts-table">
+            <thead>
+              <tr>
+                <th>Severity</th>
+                <th>Rule</th>
+                <th>Title</th>
+                <th class="col-hide-tablet">Source / Actor</th>
+                <th>Time</th>
+                <th>Status</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="alerts-tbody">
+              <tr><td colspan="7"><div class="dash-loading">Loading…</div></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div id="alerts-pagination" class="pagination"></div>
+      </div>
+    </div>
+
+    <!-- ── Events tab ─────────────────────────────────────── -->
+    <div id="tab-events" class="tab-pane hidden">
+      <div class="dash-screen">
+        <div class="filters-row" id="events-filters">
+          <select id="ef-type">
+            <option value="">All Types</option>
+            <option value="auth.login.success">auth.login.success</option>
+            <option value="auth.login.failure">auth.login.failure</option>
+            <option value="auth.logout">auth.logout</option>
+            <option value="file.upload">file.upload</option>
+            <option value="file.download">file.download</option>
+            <option value="file.delete">file.delete</option>
+            <option value="file.rename">file.rename</option>
+            <option value="file.move">file.move</option>
+            <option value="dir.create">dir.create</option>
+            <option value="dir.delete">dir.delete</option>
+          </select>
+          <select id="ef-result">
+            <option value="">All Results</option>
+            <option value="success">Success</option>
+            <option value="failure">Failure</option>
+          </select>
+          <input type="text"  id="ef-user" placeholder="Actor…"  style="width:120px">
+          <input type="date"  id="ef-from" title="From date">
+          <input type="date"  id="ef-to"   title="To date">
+          <button class="filter-btn" id="ef-apply">Apply</button>
+          <button class="filter-btn ghost" id="ef-reset">Reset</button>
+        </div>
+
+        <div id="events-table-wrap">
+          <table class="data-table" id="events-table">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Type</th>
+                <th class="col-hide-tablet">Actor</th>
+                <th class="col-hide-tablet">Source IP</th>
+                <th>Result</th>
+                <th class="col-hide-tablet">Path</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="events-tbody">
+              <tr><td colspan="7"><div class="dash-loading">Loading…</div></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div id="events-pagination" class="pagination"></div>
+      </div>
+    </div>
+
+  </div><!-- end #auth-shell -->
+
+  <!-- Rename modal (unchanged) -->
   <div id="modal-overlay" class="hidden">
     <div class="modal">
       <p id="modal-title">Rename</p>

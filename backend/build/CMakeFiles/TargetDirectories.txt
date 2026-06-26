@@ -1,0 +1,3 @@
+/home/noobiegg/Documents/gitHub_stuff/HomeNAS/backend/build/CMakeFiles/nas_backend.dir
+/home/noobiegg/Documents/gitHub_stuff/HomeNAS/backend/build/CMakeFiles/edit_cache.dir
+/home/noobiegg/Documents/gitHub_stuff/HomeNAS/backend/build/CMakeFiles/rebuild_cache.dir

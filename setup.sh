@@ -16,6 +16,7 @@ dnf install -y \
     cmake ninja-build gcc-c++ \
     openssl-devel zlib-devel jsoncpp-devel \
     brotli-devel \
+    sqlite-devel \
     git \
     nginx \
     tailscale
@@ -49,12 +50,19 @@ mkdir -p "$INSTALL_DIR"/{webui,logs,tmp_uploads}
 
 
 # TO PUT HOME PATHS IN RESPECTIVE FILES
+# NOTE: EventsController.cpp added here — it carries its own home_path
+# fallback default (events_db_path), same as Filesystem/UploadController's
+# nas_root fallback. Without this, that one fallback string would stay
+# literally "home_path/..." forever (harmless as long as config.json's
+# events_db_path key is always present, but a landmine if it's ever missing).
 sed -i "s|home_path|$_HOME|g"\
         backend/controllers/FilesystemController.cpp \
         backend/controllers/UploadController.cpp \
+        backend/controllers/EventsController.cpp \
+        backend/controllers/AlertsController.cpp \
         backend/main.cpp\
-	backend/config.json\
-	nginx/nas.conf
+        config.json\
+        nginx/nas.conf
 
 echo "==> Building backend"
 cmake -S backend -B backend/build \
@@ -62,7 +70,7 @@ cmake -S backend -B backend/build \
     -GNinja
 cmake --build backend/build -j"$(nproc)"
 cp backend/build/nas_backend "$INSTALL_DIR"
-cp backend/config.json   "$INSTALL_DIR"
+cp config.json "$INSTALL_DIR"
 
 echo "==> Deploying Web UI"
 cp -r webui/* "$INSTALL_DIR/webui/"
@@ -109,8 +117,8 @@ systemctl enable --now tailscaled
 
 echo "==> Installing and running systemd service"
 cp systemd/nas-backend.service /etc/systemd/system/
-sed -i "s|_home_|$_HOME|g" /etc/systemd/system//nas-backend.service
-sed -i "s|_user_|$_USER|g" /etc/systemd/system//nas-backend.service
+sed -i "s|_home_|$_HOME|g" /etc/systemd/system/nas-backend.service
+sed -i "s|_user_|$_USER|g" /etc/systemd/system/nas-backend.service
 chmod o+x $_HOME
 chmod o+rx $_HOME/nas
 chmod o+rx $_HOME/nas/nas_main

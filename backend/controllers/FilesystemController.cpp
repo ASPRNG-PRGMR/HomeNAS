@@ -1,4 +1,5 @@
 #include "FilesystemController.h"
+#include "../services/EventRecorder.h"
 #include <drogon/drogon.h>
 #include <filesystem>
 #include <json/json.h>
@@ -11,7 +12,7 @@ namespace fs = std::filesystem;
 
 std::string FilesystemController::safePath(const std::string &rel) {
     auto &cfg = drogon::app().getCustomConfig();
-    fs::path root = cfg.get("nas_root", "home_path/nas/nas_storage").asString();
+    fs::path root = cfg.get("nas_root", "/home/noobiegg/nas/nas_storage").asString();
     root = fs::weakly_canonical(root);
 
     // Strip leading slash so joining works correctly
@@ -51,10 +52,13 @@ void FilesystemController::list(const drogon::HttpRequestPtr &req,
 
     Json::Value items(Json::arrayValue);
     for (auto &entry : fs::directory_iterator(full)) {
+    	if (entry.path().filename() == ".nas-meta") 
+	    continue;
+	
         Json::Value item;
         item["name"] = entry.path().filename().string();
         item["path"] = fs::relative(entry.path(),
-            drogon::app().getCustomConfig().get("nas_root", "home_path/nas/nas_storage").asString()).string();
+            drogon::app().getCustomConfig().get("nas_root", "/home/noobiegg/nas/nas_storage").asString()).string();
         item["is_dir"] = entry.is_directory();
         if (!entry.is_directory()) {
             item["size"] = (Json::Int64)entry.file_size();
@@ -78,7 +82,14 @@ void FilesystemController::get(const drogon::HttpRequestPtr &req,
                                 std::function<void(const drogon::HttpResponsePtr &)> &&callback) {
     std::string rel = req->getParameter("path");
     std::string full = safePath(rel);
+    std::string actor = req->getAttributes()->get<std::string>("username");
+
     if (full.empty()) {
+        EventRecorder::emit(NasEvent(EventType::FileDownload, EventResult::Failure)
+            .withActor(actor)
+            .withSourceIp(req->getPeerAddr().toIp())
+            .withTargetPath(rel)
+            .withFailureReason("path_traversal_or_forbidden"));
         auto r = drogon::HttpResponse::newHttpResponse();
         r->setStatusCode(drogon::k403Forbidden);
         return callback(r);
@@ -89,6 +100,17 @@ void FilesystemController::get(const drogon::HttpRequestPtr &req,
         r->setStatusCode(drogon::k404NotFound);
         return callback(r);
     }
+
+    std::error_code ec;
+    auto fileSize = fs::file_size(full, ec);
+    std::optional<int64_t> sizeOpt;
+    if (!ec) sizeOpt = (int64_t)fileSize;
+
+    EventRecorder::emit(NasEvent(EventType::FileDownload, EventResult::Success)
+        .withActor(actor)
+        .withSourceIp(req->getPeerAddr().toIp())
+        .withTargetPath(rel)
+        .withBytesTransferred(sizeOpt));
 
     auto resp = drogon::HttpResponse::newFileResponse(full);
     resp->addHeader("Content-Disposition",
@@ -102,21 +124,43 @@ void FilesystemController::remove(const drogon::HttpRequestPtr &req,
                                    std::function<void(const drogon::HttpResponsePtr &)> &&callback) {
     std::string rel = req->getParameter("path");
     std::string full = safePath(rel);
+    std::string actor = req->getAttributes()->get<std::string>("username");
+
     if (full.empty()) {
+        EventRecorder::emit(NasEvent(EventType::FileDelete, EventResult::Failure)
+            .withActor(actor)
+            .withSourceIp(req->getPeerAddr().toIp())
+            .withTargetPath(rel)
+            .withFailureReason("path_traversal_or_forbidden"));
         Json::Value err; err["error"] = "Forbidden";
         auto r = drogon::HttpResponse::newHttpJsonResponse(err);
         r->setStatusCode(drogon::k403Forbidden);
         return callback(r);
     }
 
+    // Determine file vs directory *before* deletion — the path won't exist
+    // to check afterward. Drives which event_type we record.
+    bool wasDirectory = fs::is_directory(full);
+    EventType evType = wasDirectory ? EventType::DirDelete : EventType::FileDelete;
+
     std::error_code ec;
     fs::remove_all(full, ec);
     if (ec) {
+        EventRecorder::emit(NasEvent(evType, EventResult::Failure)
+            .withActor(actor)
+            .withSourceIp(req->getPeerAddr().toIp())
+            .withTargetPath(rel)
+            .withFailureReason(ec.message()));
         Json::Value err; err["error"] = ec.message();
         auto r = drogon::HttpResponse::newHttpJsonResponse(err);
         r->setStatusCode(drogon::k500InternalServerError);
         return callback(r);
     }
+
+    EventRecorder::emit(NasEvent(evType, EventResult::Success)
+        .withActor(actor)
+        .withSourceIp(req->getPeerAddr().toIp())
+        .withTargetPath(rel));
 
     Json::Value ok; ok["ok"] = true;
     callback(drogon::HttpResponse::newHttpJsonResponse(ok));
@@ -136,7 +180,14 @@ void FilesystemController::mkdir(const drogon::HttpRequestPtr &req,
 
     std::string rel = (*body)["path"].asString();
     std::string full = safePath(rel);
+    std::string actor = req->getAttributes()->get<std::string>("username");
+
     if (full.empty()) {
+        EventRecorder::emit(NasEvent(EventType::DirCreate, EventResult::Failure)
+            .withActor(actor)
+            .withSourceIp(req->getPeerAddr().toIp())
+            .withTargetPath(rel)
+            .withFailureReason("path_traversal_or_forbidden"));
         Json::Value err; err["error"] = "Forbidden";
         auto r = drogon::HttpResponse::newHttpJsonResponse(err);
         r->setStatusCode(drogon::k403Forbidden);
@@ -146,11 +197,21 @@ void FilesystemController::mkdir(const drogon::HttpRequestPtr &req,
     std::error_code ec;
     fs::create_directories(full, ec);
     if (ec) {
+        EventRecorder::emit(NasEvent(EventType::DirCreate, EventResult::Failure)
+            .withActor(actor)
+            .withSourceIp(req->getPeerAddr().toIp())
+            .withTargetPath(rel)
+            .withFailureReason(ec.message()));
         Json::Value err; err["error"] = ec.message();
         auto r = drogon::HttpResponse::newHttpJsonResponse(err);
         r->setStatusCode(drogon::k500InternalServerError);
         return callback(r);
     }
+
+    EventRecorder::emit(NasEvent(EventType::DirCreate, EventResult::Success)
+        .withActor(actor)
+        .withSourceIp(req->getPeerAddr().toIp())
+        .withTargetPath(rel));
 
     Json::Value ok; ok["ok"] = true;
     callback(drogon::HttpResponse::newHttpJsonResponse(ok));
@@ -168,9 +229,28 @@ void FilesystemController::rename(const drogon::HttpRequestPtr &req,
         return callback(r);
     }
 
-    std::string from = safePath((*body)["from"].asString());
-    std::string to   = safePath((*body)["to"].asString());
+    std::string fromRel = (*body)["from"].asString();
+    std::string toRel   = (*body)["to"].asString();
+    std::string from = safePath(fromRel);
+    std::string to   = safePath(toRel);
+    std::string actor = req->getAttributes()->get<std::string>("username");
+
+    // No separate /api/move endpoint exists — this one handler covers both.
+    // Distinguish them for logging by comparing parent directories: same
+    // parent = rename in place, different parent = move. Heuristic, not
+    // exact (e.g. a same-directory "rename" that also changes case on a
+    // case-insensitive filesystem still counts as a rename here), but it
+    // matches user intent closely enough without adding a new API surface.
+    bool isMove = fs::path(fromRel).parent_path() != fs::path(toRel).parent_path();
+    EventType evType = isMove ? EventType::FileMove : EventType::FileRename;
+
     if (from.empty() || to.empty()) {
+        EventRecorder::emit(NasEvent(evType, EventResult::Failure)
+            .withActor(actor)
+            .withSourceIp(req->getPeerAddr().toIp())
+            .withTargetPath(fromRel)
+            .withSecondaryPath(toRel)
+            .withFailureReason("path_traversal_or_forbidden"));
         Json::Value err; err["error"] = "Forbidden";
         auto r = drogon::HttpResponse::newHttpJsonResponse(err);
         r->setStatusCode(drogon::k403Forbidden);
@@ -180,11 +260,23 @@ void FilesystemController::rename(const drogon::HttpRequestPtr &req,
     std::error_code ec;
     fs::rename(from, to, ec);
     if (ec) {
+        EventRecorder::emit(NasEvent(evType, EventResult::Failure)
+            .withActor(actor)
+            .withSourceIp(req->getPeerAddr().toIp())
+            .withTargetPath(fromRel)
+            .withSecondaryPath(toRel)
+            .withFailureReason(ec.message()));
         Json::Value err; err["error"] = ec.message();
         auto r = drogon::HttpResponse::newHttpJsonResponse(err);
         r->setStatusCode(drogon::k500InternalServerError);
         return callback(r);
     }
+
+    EventRecorder::emit(NasEvent(evType, EventResult::Success)
+        .withActor(actor)
+        .withSourceIp(req->getPeerAddr().toIp())
+        .withTargetPath(fromRel)
+        .withSecondaryPath(toRel));
 
     Json::Value ok; ok["ok"] = true;
     callback(drogon::HttpResponse::newHttpJsonResponse(ok));
