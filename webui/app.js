@@ -167,6 +167,7 @@ function renderFileList(items) {
     const modified = formatDate(item.modified);
     return `
       <div class="file-row"
+           draggable="true"
            data-path="${escHtml(item.path)}"
            data-dir="${item.is_dir}"
            data-name="${escHtml(item.name)}">
@@ -178,12 +179,14 @@ function renderFileList(items) {
           ${!item.is_dir ? `<button class="dl-btn">↓</button>` : ''}
           <button class="ren-btn">✎</button>
           <button class="del del-btn">✕</button>
+          <div class="drag-handle" title="Drag to move">⠿</div>
         </div>
       </div>`;
   }).join('');
 
   main.innerHTML = header + rows;
 
+  // ── attach click + action handlers ────────────────────────────────────────
   main.querySelectorAll('.file-row').forEach(row => {
     const path  = row.dataset.path;
     const isDir = row.dataset.dir === 'true';
@@ -207,7 +210,113 @@ function renderFileList(items) {
       navigate(currentPath);
     });
   });
+
+  // ── drag-to-move ──────────────────────────────────────────────────────────
+  attachDragHandlers(main);
 }
+
+// Track what's being dragged — also exposed on window for path-bar drop zones
+let _dragSourcePath = null;
+let _dragSourceName = null;
+
+// Exposed so index.html inline script can call it from crumb drop handlers
+window._nasMove = async function(srcFull, destFull) {
+  await post('/api/rename', { from: srcFull, to: destFull });
+  navigate(currentPath);
+};
+
+Object.defineProperties(window, {
+  _dragSourcePath: {
+    get: () => _dragSourcePath,
+    set: v => { _dragSourcePath = v; },
+    configurable: true
+  },
+  _dragSourceName: {
+    get: () => _dragSourceName,
+    set: v => { _dragSourceName = v; },
+    configurable: true
+  }
+});
+
+function attachDragHandlers(container) {
+  const rows = container.querySelectorAll('.file-row');
+
+  rows.forEach(row => {
+    const srcPath = row.dataset.path; // relative, no leading slash
+    const srcName = row.dataset.name;
+
+    // Only allow drag to start from the handle
+    const handle = row.querySelector('.drag-handle');
+    handle.addEventListener('mousedown', () => {
+      row.setAttribute('draggable', 'true');
+    });
+
+    row.addEventListener('dragstart', e => {
+      // Bail if drag didn't originate from handle
+      if (!e.target.closest('.file-row') || !_dragViaHandle) return;
+      _dragSourcePath = srcPath;
+      _dragSourceName = srcName;
+      e.dataTransfer.effectAllowed = 'move';
+      // Minimal ghost — browser default ghost is fine, just tag it
+      e.dataTransfer.setData('text/plain', srcName);
+      setTimeout(() => row.classList.add('dragging'), 0);
+    });
+
+    row.addEventListener('dragend', () => {
+      row.classList.remove('dragging');
+      _dragSourcePath = null;
+      _dragSourceName = null;
+      _dragViaHandle  = false;
+      // Clear any lingering drop targets
+      container.querySelectorAll('.drop-target').forEach(r =>
+        r.classList.remove('drop-target'));
+    });
+
+    // Only folder rows are valid drop targets
+    if (row.dataset.dir !== 'true') return;
+
+    row.addEventListener('dragenter', e => {
+      e.preventDefault();
+      if (!_dragSourcePath || row.dataset.path === _dragSourcePath) return;
+      row.classList.add('drop-target');
+    });
+
+    row.addEventListener('dragover', e => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+    });
+
+    row.addEventListener('dragleave', e => {
+      // Only clear if actually leaving this row (not entering a child)
+      if (!row.contains(e.relatedTarget)) {
+        row.classList.remove('drop-target');
+      }
+    });
+
+    row.addEventListener('drop', async e => {
+      e.preventDefault();
+      row.classList.remove('drop-target');
+      const destDirPath = row.dataset.path; // relative path of folder
+
+      if (!_dragSourcePath || destDirPath === _dragSourcePath) return;
+
+      // Build the new path: destination folder + source filename
+      const srcFull  = '/' + _dragSourcePath;          // /dir/file.txt
+      const destFull = '/' + destDirPath + '/' + _dragSourceName; // /dir/subdir/file.txt
+
+      if (srcFull === destFull) return;
+
+      await post('/api/rename', { from: srcFull, to: destFull });
+      navigate(currentPath);
+    });
+  });
+}
+
+// Flag set only when a drag originates from the handle
+let _dragViaHandle = false;
+document.getElementById('file-list').addEventListener('mousedown', e => {
+  _dragViaHandle = !!e.target.closest('.drag-handle');
+});
 
 // ── download ──────────────────────────────────────────────────────────────────
 function downloadFile(path, name) {

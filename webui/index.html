@@ -2,14 +2,14 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>HomeNAS</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
-  <!-- ── Login screen ──────────────────────────────────── -->
-  <div id="login-screen" class="screen">
+  <!--  Login screen  -->
+  <div id="login-screen">
     <div class="login-box">
       <div class="login-logo">NAS</div>
       <input id="login-user" type="text"     placeholder="Username" autocomplete="username">
@@ -19,30 +19,58 @@
     </div>
   </div>
 
-  <!-- ── Authenticated shell ───────────────────────────── -->
+  <!--  Authenticated shell  -->
   <div id="auth-shell" class="hidden">
 
-    <!-- Top nav — visible across all authenticated views -->
+    <!-- Top nav bar -->
     <nav id="top-nav">
-      <button class="nav-tab active" data-tab="files">📁 Files</button>
-      <button class="nav-tab"        data-tab="overview">◉ Overview</button>
-      <button class="nav-tab"        data-tab="alerts">
-        ⚠ Alerts <span id="nav-alert-count" class="nav-alert-badge hidden">0</span>
-      </button>
-      <button class="nav-tab"        data-tab="events">≡ Events</button>
-      <div class="nav-spacer"></div>
-      <button id="logout-btn" class="icon-btn ghost">Sign out</button>
+      <div id="nav-inner">
+      <!-- Left: 22 grid pill -->
+      <div id="nav-tabs-left">
+        <button class="nav-tab active" data-tab="files">&#128193; Files</button>
+        <button class="nav-tab"        data-tab="overview">&#9711; Overview</button>
+        <button class="nav-tab"        data-tab="alerts">
+           &#9888; Alerts
+          <span id="nav-alert-count" class="nav-alert-badge hidden">0</span>
+        </button>
+        <button class="nav-tab"        data-tab="events">&#8801; Events</button>
+      </div>
+
+      <!-- Centre: wordmark only -->
+      <div id="nav-centre">
+        <div id="nav-wordmark">HOME NAS</div>
+      </div>
+
+      <!-- Right: sign out -->
+      <div id="nav-right">
+        <button id="logout-btn">Sign out</button>
+      </div>
+      </div><!-- end #nav-inner -->
     </nav>
 
-    <!-- ── Files tab ─────────────────────────────────────── -->
+    <!-- FAB buttons (files tab only) -->
+    <div id="fab-cluster" class="hidden">
+      <button id="fab-folder" class="fab" data-tip="New folder">&#128193;</button>
+      <button id="fab-upload" class="fab" data-tip="Upload">&#8593;</button>
+    </div>
+
+    <!--  Files tab  -->
     <div id="tab-files" class="tab-pane">
+      <!-- kept invisible; app.js listeners attach here -->
       <header>
         <nav id="breadcrumb"></nav>
         <div class="header-actions">
-          <button id="new-folder-btn" class="icon-btn" title="New folder">+ Folder</button>
-          <button id="upload-btn"     class="icon-btn" title="Upload files">↑ Upload</button>
+          <button id="new-folder-btn">+ Folder</button>
+          <button id="upload-btn"> Upload</button>
         </div>
       </header>
+
+      <!-- Path bar: sticky subheader shown when inside a subdirectory -->
+      <div id="path-bar" class="hidden">
+        <button id="path-home" title="Home">&#8962;</button>
+        <button id="path-back" title="Back">&#8592;</button>
+        <div id="path-pill"></div>
+      </div>
 
       <div id="drop-overlay" class="hidden">Drop files to upload</div>
       <main id="file-list"></main>
@@ -55,61 +83,56 @@
       <input type="file" id="file-input" multiple style="display:none">
     </div>
 
-    <!-- ── Overview tab ──────────────────────────────────── -->
+    <!--  Overview tab  -->
     <div id="tab-overview" class="tab-pane hidden">
       <div class="dash-screen">
-
-        <!-- Severity stat cards -->
         <div class="stat-cards" id="overview-sev-cards">
           <div class="stat-card" id="card-critical" data-sev="critical">
             <div class="stat-card-label">Critical</div>
-            <div class="stat-card-value critical" id="count-critical">—</div>
+            <div class="stat-card-value critical" id="count-critical"></div>
             <div class="stat-card-sub">open alerts</div>
           </div>
           <div class="stat-card" id="card-high" data-sev="high">
             <div class="stat-card-label">High</div>
-            <div class="stat-card-value high" id="count-high">—</div>
+            <div class="stat-card-value high" id="count-high"></div>
             <div class="stat-card-sub">open alerts</div>
           </div>
           <div class="stat-card" id="card-medium" data-sev="medium">
             <div class="stat-card-label">Medium</div>
-            <div class="stat-card-value medium" id="count-medium">—</div>
+            <div class="stat-card-value medium" id="count-medium"></div>
             <div class="stat-card-sub">open alerts</div>
           </div>
           <div class="stat-card" id="card-low" data-sev="low">
             <div class="stat-card-label">Low</div>
-            <div class="stat-card-value low" id="count-low">—</div>
+            <div class="stat-card-value low" id="count-low"></div>
             <div class="stat-card-sub">open alerts</div>
           </div>
         </div>
 
-        <!-- Events today + open total -->
         <div class="stat-cards" style="margin-top:10px">
           <div class="stat-card">
             <div class="stat-card-label">Events Today</div>
-            <div class="stat-card-value" id="count-events-today">—</div>
+            <div class="stat-card-value" id="count-events-today"></div>
             <div class="stat-card-sub">total actions</div>
           </div>
           <div class="stat-card">
             <div class="stat-card-label">Open Alerts</div>
-            <div class="stat-card-value" id="count-alerts-total">—</div>
+            <div class="stat-card-value" id="count-alerts-total"></div>
             <div class="stat-card-sub">require attention</div>
           </div>
           <div class="stat-card">
             <div class="stat-card-label">Auth Failures</div>
-            <div class="stat-card-value" id="count-auth-failures">—</div>
+            <div class="stat-card-value" id="count-auth-failures"></div>
             <div class="stat-card-sub">today</div>
           </div>
           <div class="stat-card">
             <div class="stat-card-label">File Deletes</div>
-            <div class="stat-card-value" id="count-deletes">—</div>
+            <div class="stat-card-value" id="count-deletes"></div>
             <div class="stat-card-sub">today</div>
           </div>
         </div>
 
         <div class="overview-grid">
-
-          <!-- Recent critical/high alerts -->
           <div class="dash-card">
             <div class="dash-card-header">
               <span class="dash-card-title">Recent Alerts</span>
@@ -117,48 +140,31 @@
                 <span class="poll-dot"></span>live
               </span>
             </div>
-            <div class="dash-card-body" id="overview-recent-alerts">
-              <div class="dash-loading">Loading…</div>
-            </div>
+            <div class="dash-card-body" id="overview-recent-alerts"><div class="dash-loading">Loading</div></div>
           </div>
-
-          <!-- Live activity feed -->
           <div class="dash-card">
-            <div class="dash-card-header">
-              <span class="dash-card-title">Live Activity</span>
-            </div>
-            <div class="dash-card-body" id="overview-live-feed">
-              <div class="dash-loading">Loading…</div>
-            </div>
+            <div class="dash-card-header"><span class="dash-card-title">Live Activity</span></div>
+            <div class="dash-card-body" id="overview-live-feed"><div class="dash-loading">Loading</div></div>
           </div>
-
-          <!-- Top source IPs -->
           <div class="dash-card">
             <div class="dash-card-header">
               <span class="dash-card-title">Top Source IPs</span>
               <span style="font-size:11px;color:var(--muted)">today</span>
             </div>
-            <div class="dash-card-body" id="overview-top-ips">
-              <div class="dash-loading">Loading…</div>
-            </div>
+            <div class="dash-card-body" id="overview-top-ips"><div class="dash-loading">Loading</div></div>
           </div>
-
-          <!-- Top actors -->
           <div class="dash-card">
             <div class="dash-card-header">
               <span class="dash-card-title">Top Actors</span>
               <span style="font-size:11px;color:var(--muted)">today</span>
             </div>
-            <div class="dash-card-body" id="overview-top-actors">
-              <div class="dash-loading">Loading…</div>
-            </div>
+            <div class="dash-card-body" id="overview-top-actors"><div class="dash-loading">Loading</div></div>
           </div>
-
         </div>
       </div>
     </div>
 
-    <!-- ── Alerts tab ─────────────────────────────────────── -->
+    <!--  Alerts tab  -->
     <div id="tab-alerts" class="tab-pane hidden">
       <div class="dash-screen">
         <div class="filters-row" id="alerts-filters">
@@ -171,18 +177,12 @@
           </select>
           <select id="af-rule">
             <option value="">All Rules</option>
-            <option value="BF-001">BF-001</option>
-            <option value="BF-002">BF-002</option>
-            <option value="BF-003">BF-003</option>
-            <option value="BF-004">BF-004</option>
-            <option value="BF-005">BF-005</option>
-            <option value="BF-006">BF-006</option>
-            <option value="MD-001">MD-001</option>
-            <option value="MD-002">MD-002</option>
-            <option value="MD-003">MD-003</option>
-            <option value="MD-004">MD-004</option>
-            <option value="MD-005">MD-005</option>
-            <option value="MD-006">MD-006</option>
+            <option value="BF-001">BF-001</option><option value="BF-002">BF-002</option>
+            <option value="BF-003">BF-003</option><option value="BF-004">BF-004</option>
+            <option value="BF-005">BF-005</option><option value="BF-006">BF-006</option>
+            <option value="MD-001">MD-001</option><option value="MD-002">MD-002</option>
+            <option value="MD-003">MD-003</option><option value="MD-004">MD-004</option>
+            <option value="MD-005">MD-005</option><option value="MD-006">MD-006</option>
           </select>
           <select id="af-status">
             <option value="">All Statuses</option>
@@ -195,22 +195,17 @@
           <button class="filter-btn" id="af-apply">Apply</button>
           <button class="filter-btn ghost" id="af-reset">Reset</button>
         </div>
-
         <div id="alerts-table-wrap">
           <table class="data-table" id="alerts-table">
             <thead>
               <tr>
-                <th>Severity</th>
-                <th>Rule</th>
-                <th>Title</th>
+                <th>Severity</th><th>Rule</th><th>Title</th>
                 <th class="col-hide-tablet">Source / Actor</th>
-                <th>Time</th>
-                <th>Status</th>
-                <th></th>
+                <th>Time</th><th>Status</th><th></th>
               </tr>
             </thead>
             <tbody id="alerts-tbody">
-              <tr><td colspan="7"><div class="dash-loading">Loading…</div></td></tr>
+              <tr><td colspan="7"><div class="dash-loading">Loading</div></td></tr>
             </tbody>
           </table>
         </div>
@@ -218,7 +213,7 @@
       </div>
     </div>
 
-    <!-- ── Events tab ─────────────────────────────────────── -->
+    <!--  Events tab  -->
     <div id="tab-events" class="tab-pane hidden">
       <div class="dash-screen">
         <div class="filters-row" id="events-filters">
@@ -240,19 +235,17 @@
             <option value="success">Success</option>
             <option value="failure">Failure</option>
           </select>
-          <input type="text"  id="ef-user" placeholder="Actor…"  style="width:120px">
-          <input type="date"  id="ef-from" title="From date">
-          <input type="date"  id="ef-to"   title="To date">
+          <input type="text" id="ef-user" placeholder="Actor" style="width:120px">
+          <input type="date" id="ef-from" title="From date">
+          <input type="date" id="ef-to"   title="To date">
           <button class="filter-btn" id="ef-apply">Apply</button>
           <button class="filter-btn ghost" id="ef-reset">Reset</button>
         </div>
-
         <div id="events-table-wrap">
           <table class="data-table" id="events-table">
             <thead>
               <tr>
-                <th>Time</th>
-                <th>Type</th>
+                <th>Time</th><th>Type</th>
                 <th class="col-hide-tablet">Actor</th>
                 <th class="col-hide-tablet">Source IP</th>
                 <th>Result</th>
@@ -261,7 +254,7 @@
               </tr>
             </thead>
             <tbody id="events-tbody">
-              <tr><td colspan="7"><div class="dash-loading">Loading…</div></td></tr>
+              <tr><td colspan="7"><div class="dash-loading">Loading</div></td></tr>
             </tbody>
           </table>
         </div>
@@ -271,7 +264,7 @@
 
   </div><!-- end #auth-shell -->
 
-  <!-- Rename modal (unchanged) -->
+  <!-- Rename modal -->
   <div id="modal-overlay" class="hidden">
     <div class="modal">
       <p id="modal-title">Rename</p>
@@ -284,5 +277,149 @@
   </div>
 
   <script src="app.js"></script>
+
+  <script>
+  (function () {
+
+    //  FABs 
+    document.getElementById('fab-upload').addEventListener('click', () =>
+      document.getElementById('upload-btn').click());
+    document.getElementById('fab-folder').addEventListener('click', () =>
+      document.getElementById('new-folder-btn').click());
+
+    //  File action button tooltips 
+    const fileList = document.getElementById('file-list');
+    new MutationObserver(() => {
+      fileList.querySelectorAll('.dl-btn:not([title])').forEach(b  => b.title = 'Download');
+      fileList.querySelectorAll('.ren-btn:not([title])').forEach(b => b.title = 'Rename');
+      fileList.querySelectorAll('.del-btn:not([title])').forEach(b => b.title = 'Delete');
+    }).observe(fileList, { childList: true, subtree: true });
+
+    //  Path bar: home + back + breadcrumb trail 
+    const breadcrumb = document.getElementById('breadcrumb');
+    const pathBar    = document.getElementById('path-bar');
+    const pathPill   = document.getElementById('path-pill');
+    const pathHome   = document.getElementById('path-home');
+    const pathBack   = document.getElementById('path-back');
+
+    pathHome.addEventListener('click', () => {
+      // find the root crumb and click it
+      const root = breadcrumb.querySelector('.crumb[data-path="/"]');
+      if (root) root.click();
+    });
+
+    pathBack.addEventListener('click', () => {
+      // find current path and navigate to parent
+      const active = breadcrumb.querySelector('.crumb.active');
+      const path   = active?.dataset.path || '/';
+      const parent = path.substring(0, path.lastIndexOf('/')) || '/';
+      const parentCrumb = breadcrumb.querySelector(`.crumb[data-path="${parent}"]`);
+      if (parentCrumb) parentCrumb.click();
+      else {
+        // fallback: use navigate directly if accessible
+        const root = breadcrumb.querySelector('.crumb[data-path="/"]');
+        if (root) root.click();
+      }
+    });
+
+    function attachCrumbDrop(el, destPath) {
+      el.addEventListener('dragenter', e => {
+        e.preventDefault();
+        if (!window._dragSourcePath) return;
+        const srcParent = '/' + window._dragSourcePath.substring(0, window._dragSourcePath.lastIndexOf('/'));
+        const normalSrcParent = srcParent === '//' ? '/' : srcParent;
+        if (normalSrcParent === destPath) return; // already here
+        el.classList.add('crumb-drop-target');
+      });
+      el.addEventListener('dragover', e => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+      });
+      el.addEventListener('dragleave', e => {
+        if (!el.contains(e.relatedTarget)) el.classList.remove('crumb-drop-target');
+      });
+      el.addEventListener('drop', async e => {
+        e.preventDefault();
+        el.classList.remove('crumb-drop-target');
+        if (!window._dragSourcePath || !window._dragSourceName) return;
+        const srcFull  = '/' + window._dragSourcePath;
+        const destFull = (destPath === '/' ? '' : destPath) + '/' + window._dragSourceName;
+        if (srcFull === destFull) return;
+        await window._nasMove(srcFull, destFull);
+      });
+    }
+
+    function syncPathBar() {
+      const onFiles = !document.getElementById('tab-files').classList.contains('hidden');
+      const crumbs  = breadcrumb.querySelectorAll('.crumb');
+      const inSubdir = crumbs.length > 1;
+
+      document.getElementById('fab-cluster').classList.toggle('hidden', !onFiles);
+
+      if (!onFiles || !inSubdir) {
+        pathBar.classList.add('hidden');
+        return;
+      }
+
+      pathBar.classList.remove('hidden');
+
+      // Home button is a drop target for root
+      attachCrumbDrop(pathHome, '/');
+
+      // Build pill content from breadcrumb
+      pathPill.innerHTML = '';
+      crumbs.forEach((c, i) => {
+        const label     = i === 0 ? '/' : c.textContent;
+        const crumbPath = c.dataset.path; // e.g. "/" or "/idk"
+        const span      = document.createElement('span');
+        span.className  = c.classList.contains('active') ? 'crumb active' : 'crumb';
+        span.textContent = label;
+        if (!span.classList.contains('active'))
+          span.addEventListener('click', () => c.click());
+        // All crumbs (including root /) are drop targets
+        attachCrumbDrop(span, crumbPath);
+        pathPill.appendChild(span);
+        if (i < crumbs.length - 1) {
+          const sep = document.createElement('span');
+          sep.className = 'sep';
+          sep.textContent = ' / ';
+          pathPill.appendChild(sep);
+        }
+      });
+    }
+
+    document.querySelectorAll('.nav-tab').forEach(btn =>
+      btn.addEventListener('click', () => setTimeout(syncPathBar, 0)));
+
+    new MutationObserver(syncPathBar)
+      .observe(breadcrumb, { childList: true, subtree: true, characterData: true });
+
+    //  Alert glow 
+    const alertBtn = document.querySelector('[data-tab="alerts"]');
+    function setAlertGlow(sev) {
+      alertBtn.classList.remove('glow-critical','glow-high','glow-medium','glow-low','glow-none');
+      alertBtn.classList.add('glow-' + (sev || 'none'));
+    }
+
+    const origFetch = window.fetch;
+    window.fetch = function(url, opts) {
+      const p = origFetch.apply(this, arguments);
+      if (typeof url === 'string' && url.includes('/api/alerts/stats/summary')) {
+        p.then(r => r.clone().json()).then(data => {
+          const s = data?.by_severity || {};
+          if      ((s.critical?.open || 0) > 0) setAlertGlow('critical');
+          else if ((s.high?.open     || 0) > 0) setAlertGlow('high');
+          else if ((s.medium?.open   || 0) > 0) setAlertGlow('medium');
+          else if ((s.low?.open      || 0) > 0) setAlertGlow('low');
+          else                                   setAlertGlow('none');
+        }).catch(() => {});
+      }
+      return p;
+    };
+
+    setAlertGlow('none');
+    syncPathBar();
+  })();
+  </script>
 </body>
 </html>

@@ -69,6 +69,10 @@ cmake -S backend -B backend/build \
     -DCMAKE_BUILD_TYPE=Release \
     -GNinja
 cmake --build backend/build -j"$(nproc)"
+if [ -f "$INSTALL_DIR/nas_backend" ]; then
+    rm -f "$INSTALL_DIR/nas_backend"
+fi
+cp backend/build/nas_backend "$INSTALL_DIR"
 cp backend/build/nas_backend "$INSTALL_DIR"
 cp config.json "$INSTALL_DIR"
 

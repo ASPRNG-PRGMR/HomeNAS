@@ -287,3 +287,81 @@ Duplicate detection, stale file identification, storage usage trends. Separate f
 - **`_migration_guard` is in `alerts.db` but migrations apply to `events.db`:** Acceptable for now; a unified meta DB would be cleaner if migrations become more frequent.
 - **`nas.conf` uses `home_path` token:** Correctly handled by `setup.sh`'s `sed` substitution. Must be substituted manually if edited post-install.
 - **MD-006 fires on every directory delete with no cooldown:** A legitimate bulk directory reorganisation during normal use will flood the alert table with MD-006 rows. Acceptable at personal NAS scale; would need a cooldown or a "trusted operation" exemption mechanism before multi-user deployment.
+
+---
+
+## Phase 2.6 — Web UI Refactor + Drag-to-Move
+
+### Context
+
+The web UI worked correctly but had two usability problems that only became apparent after deploying to a real laptop screen at 170% browser zoom:
+
+1. At high zoom levels the nav bar left-pinned tab pill and right-pinned Sign Out button occupied the far edges of the viewport, leaving the centre wordmark isolated in a sea of dead space. The file list and dashboard content were also left-anchored rather than centred.
+2. There was no way to move files or folders between directories from the browser — the only options were download, rename, and delete. Moving required SSH or SCP.
+
+No backend changes in this phase. All changes are `webui/` only.
+
+---
+
+### Nav bar centring refactor
+
+**Problem:** `#top-nav` used `position: fixed` with `#nav-tabs-left` at `position: absolute; left: 14px` and `#nav-right` at `position: absolute; right: 14px`. At 170% zoom this spread them to the literal screen edges. Adding a `max-width` constraint to `#top-nav` itself doesn't work because the nav spans the full viewport width.
+
+**Solution:** Introduced `#nav-inner` — a `max-width: 1100px; margin: 0 auto` flex container wrapping all three nav children. `#nav-tabs-left` and `#nav-right` are now flex siblings (no longer absolutely positioned). `#nav-centre` keeps `position: absolute; left: 50%; transform: translateX(-50%)` but relative to `#nav-inner` rather than the viewport, so the wordmark is always geometrically centred between the two flanking elements regardless of zoom.
+
+`main#file-list` and `.dash-screen` both gained `margin: 0 auto; width: 100%` so content columns centre themselves within the viewport at any zoom level.
+
+**Mobile:** at ≤768px `#nav-inner` switches to `flex-direction: column` — wordmark on top, tab pill below it as a single 4-column row. Sign Out moves to `position: absolute; right: 14px` within the column stack. At ≤520px the wordmark hides and the layout collapses to a single row.
+
+---
+
+### Path bar relocation
+
+**Problem:** The directory traversal pill (`⌂ ← / dirname`) lived inside `#nav-centre`, stacked directly below the wordmark. This made it visually part of the title bar rather than part of the file browser.
+
+**Decision:** Moved `#path-bar` out of `#nav-centre` entirely and placed it as the first child of `#tab-files`, directly above `#file-list`. `#nav-centre` now contains only the wordmark — isolated, clearly a branding element.
+
+The path bar is no longer sticky; it scrolls with the file list. It uses `margin: 16px auto 0; width: fit-content` so it centres itself under the wordmark with visible breathing room. The pill style (dark surface, rounded border, monospace crumbs) is unchanged from the original design.
+
+`syncPathBar()` in the inline script was updated to observe the new DOM position. No functional change to the home/back button logic.
+
+---
+
+### Gap reduction
+
+`tab-pane` `margin-top` reduced from `calc(var(--nav-h) + 16px)` to `calc(var(--nav-h) + 4px)`. `main#file-list` `padding-top` reduced from `56px` to `24px`. The old values were compensating for space that the path bar previously occupied inside the nav — now that it's in the file list flow these offsets were unnecessary dead space.
+
+---
+
+### Drag-to-move
+
+**Motivation:** Moving a file required rename modal → type the full destination path manually, or SCP. Neither is acceptable for a browser-based file manager.
+
+**API surface used:** `POST /api/rename` with `{ from, to }`. No new endpoint. `FilesystemController::rename` already distinguished rename vs move by comparing parent directories and emitting `FileMove` vs `FileRename` accordingly — this feature gets that audit trail for free.
+
+**Drag handle:** A `⠿` (braille pattern dots-123456) element with class `drag-handle` appended inside `.file-actions` on every row. At rest it's `color: var(--border)` (invisible but occupying space, so layout doesn't shift). It becomes visible (`var(--muted)`) on row hover and fully bright on direct hover. `cursor: grab` / `grabbing` on active. The handle sits in the existing 80px actions column — no grid template change needed.
+
+**Handle-gated dragging:** `draggable="true"` is set on every `.file-row` at render time, but `dragstart` is suppressed unless `_dragViaHandle` is true. This flag is set by a `mousedown` listener on `#file-list` that checks `e.target.closest('.drag-handle')`. This prevents accidental drags when clicking a row name or icon — only grabbing the handle initiates a drag.
+
+**Drop targets — folders in the list:** Only rows with `data-dir="true"` receive `dragenter/dragover/dragleave/drop` handlers. `dragleave` checks `e.relatedTarget` to avoid flickering when the cursor crosses child elements within the row. On drop: `post('/api/rename', { from: '/' + srcPath, to: '/' + destDirPath + '/' + srcName })` followed by `navigate(currentPath)`.
+
+**Drop targets — path bar crumbs:** Moving items *out* of the current directory required a separate drop surface. The path pill crumbs (`/ dirname`) and the `⌂` home button are now drop targets, wired in `syncPathBar()` via a shared `attachCrumbDrop(el, destPath)` helper. On drop the same `_nasMove(src, dest)` function fires. The crumb highlights with an accent glow (`box-shadow: 0 0 0 1.5px var(--accent)`) when a dragged item hovers over it.
+
+**Cross-script state sharing:** `_dragSourcePath` and `_dragSourceName` are module-level variables in `app.js` exposed on `window` via `Object.defineProperties`. `window._nasMove` is also exposed. This is necessary because `syncPathBar()` lives in an inline `<script>` in `index.html` and cannot import from `app.js` directly.
+
+**Visual states:**
+- `.file-row.dragging` — 35% opacity, `pointer-events: none` while in flight
+- `.file-row.drop-target` — dashed accent outline, blue-tinted background, name turns accent colour
+- `.crumb.crumb-drop-target` / `#path-home.crumb-drop-target` — accent glow + blue tint
+
+**What drag-to-move does not cover:** Dragging items from the OS file manager into the NAS browser — that already worked via the existing `dragenter/drop` listener on `#auth-shell` which triggers `uploadFiles()`. Drag-to-move is purely internal (NAS item → NAS folder).
+
+---
+
+### Files modified in Phase 2.6
+
+`webui/index.html` — added `#nav-inner` wrapper around nav children; moved `#path-bar` from `#nav-centre` into `#tab-files`; updated `syncPathBar()` to call `attachCrumbDrop()` on each crumb; added `attachCrumbDrop()` helper function.
+
+`webui/style.css` — `#nav-inner` centring container; removed absolute positioning from `#nav-tabs-left` and `#nav-right`; `#nav-centre` simplified to wordmark-only; `#path-bar` repositioned with `margin: 16px auto 0; width: fit-content`; reduced `tab-pane` margin-top and `main#file-list` padding-top; added `.drag-handle`, `.file-row.dragging`, `.file-row.drop-target`, `.crumb-drop-target`, `#path-home.crumb-drop-target` rules; mobile breakpoints updated for new nav column layout.
+
+`webui/app.js` — `renderFileList` adds `draggable="true"` and `<div class="drag-handle">` to each row; `attachDragHandlers()` wires all drag events; `_dragViaHandle` flag gates drag initiation to handle-only; `_dragSourcePath`/`_dragSourceName` exposed on `window`; `window._nasMove` exposed for inline script access.

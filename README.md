@@ -24,7 +24,7 @@ The USP is that it's not just a NAS with logging bolted on — the security plat
 
 ## What it is
 
-- **NAS:** browse, upload, download, rename, move files from any browser on your Tailscale network
+- **NAS:** browse, upload, download, rename, move, and drag-to-move files and folders from any browser on your Tailscale network
 - **Audit log:** every auth event and filesystem action recorded to a local SQLite database, append-only, never mutated
 - **Real-time detection:** 12 rules covering brute-force login (BF-001 through BF-006) and mass-delete (MD-001 through MD-006), running within 250ms of each action
 - **SOC dashboard:** Overview, Alert management, Event explorer, and investigation timelines — all in the same browser tab as the file manager
@@ -73,7 +73,8 @@ HomeNAS/
 │   └── config.json
 │
 ├── webui/
-│   ├── index.html
+│   ├── index.html                      — shell, nav (#nav-inner centring wrapper),
+│   │                                     tab panes, path bar (in #tab-files, not nav)
 │   ├── style.css
 │   └── app.js
 │
@@ -135,7 +136,7 @@ Four tabs, always accessible from the same browser session as the file manager:
 - **Overview** — severity cards (open alert counts), events today, auth failure count, recent alerts, live activity feed, top source IPs and actors with proportional failure bars. Severity cards are clickable — click Critical to jump straight to the filtered alert list.
 - **Alerts** — full alert list with severity/rule/status/date filters, inline expand showing evidence JSON, status action buttons (Mark Investigating / Dismiss / Reopen), and a ±10 minute investigation timeline showing all related events before and after the alert fired.
 - **Events** — full event log with type/result/user/date filters, inline expand showing every field including target path, secondary path, bytes transferred, and failure reason.
-- **Files** — the original NAS file manager, unchanged.
+- **Files** — the NAS file manager. Drag the `⠿` handle on any row to move it into another folder in the current directory, or drag it onto a breadcrumb segment in the path pill to move it up to a parent directory. Moves are recorded as `file.move` events and trigger mass-delete detection rules the same as any other deletion-class action.
 
 The dashboard polls every 15 seconds. The alert badge on the Alerts tab shows the live open alert count.
 
