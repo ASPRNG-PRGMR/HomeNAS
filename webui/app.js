@@ -331,11 +331,15 @@ function downloadFile(path, name) {
 }
 
 // ── upload ────────────────────────────────────────────────────────────────────
+// Upload-btn triggers normal file picker (files only via click)
 document.getElementById('upload-btn').addEventListener('click', () => {
   document.getElementById('file-input').click();
 });
 document.getElementById('file-input').addEventListener('change', e => {
   uploadFiles(e.target.files); e.target.value = '';
+});
+document.getElementById('folder-input').addEventListener('change', e => {
+  uploadFlatList(Array.from(e.target.files)); e.target.value = '';
 });
 
 const appShell    = document.getElementById('auth-shell');
@@ -352,12 +356,99 @@ appShell.addEventListener('dragleave', () => {
   if (dragCounter === 0) dropOverlay.classList.add('hidden');
 });
 appShell.addEventListener('dragover', e => e.preventDefault());
-appShell.addEventListener('drop', e => {
+appShell.addEventListener('drop', async e => {
   if (activeTab !== 'files') return;
   e.preventDefault(); dragCounter = 0;
   dropOverlay.classList.add('hidden');
-  uploadFiles(e.dataTransfer.files);
+
+  // Use DataTransferItemList to support folder drops
+  const items = e.dataTransfer.items;
+  if (items && items.length && items[0].webkitGetAsEntry) {
+    const entries = Array.from(items).map(i => i.webkitGetAsEntry()).filter(Boolean);
+    const files = await readEntries(entries, '');
+    await uploadFlatList(files);
+  } else {
+    uploadFiles(e.dataTransfer.files);
+  }
 });
+
+// Recursively read a list of FileSystemEntry objects into a flat array
+// Each item is { file: File, relativePath: string } where relativePath
+// mirrors webkitRelativePath so uploadFlatList can recreate the tree.
+async function readEntries(entries, basePath) {
+  const result = [];
+  for (const entry of entries) {
+    if (entry.isFile) {
+      const file = await new Promise((res, rej) => entry.file(res, rej));
+      // Attach a synthetic relativePath so uploadFlatList works the same way
+      Object.defineProperty(file, 'webkitRelativePath', {
+        value: basePath ? basePath + '/' + entry.name : entry.name,
+        writable: false
+      });
+      result.push(file);
+    } else if (entry.isDirectory) {
+      const reader = entry.createReader();
+      // readEntries may return results in batches — keep reading until empty
+      let batch;
+      const children = [];
+      do {
+        batch = await new Promise((res, rej) => reader.readEntries(res, rej));
+        children.push(...batch);
+      } while (batch.length > 0);
+      const sub = await readEntries(children, basePath ? basePath + '/' + entry.name : entry.name);
+      result.push(...sub);
+    }
+  }
+  return result;
+}
+
+// Upload a flat list of File objects that already have webkitRelativePath set
+async function uploadFlatList(files) {
+  if (!files.length) return;
+  const bar   = document.getElementById('upload-bar');
+  const prog  = document.getElementById('upload-progress');
+  const label = document.getElementById('upload-label');
+  bar.classList.remove('hidden');
+
+  // Create all needed subdirectories first
+  const dirs = new Set();
+  for (const f of files) {
+    const parts = f.webkitRelativePath.split('/');
+    for (let i = 1; i < parts.length; i++) {
+      dirs.add(currentPath.replace(/\/$/, '') + '/' + parts.slice(0, i).join('/'));
+    }
+  }
+  const sortedDirs = Array.from(dirs).sort((a, b) => a.split('/').length - b.split('/').length);
+  label.textContent = 'Creating folders...';
+  prog.style.setProperty('--pct', '10%');
+  for (const dir of sortedDirs) {
+    await post('/api/mkdir', { path: dir }).catch(() => {});
+  }
+
+  // Upload each file to its subdirectory
+  const total = files.length;
+  let done = 0;
+  for (const f of files) {
+    const parts   = f.webkitRelativePath.split('/');
+    const fileDir = parts.length > 1
+      ? currentPath.replace(/\/$/, '') + '/' + parts.slice(0, -1).join('/')
+      : currentPath;
+    const fd = new FormData();
+    fd.append('files', f);
+    label.textContent = `Uploading ${done + 1} / ${total}: ${f.name}`;
+    prog.style.setProperty('--pct', Math.round(10 + (done / total) * 88) + '%');
+    await api('POST', `/api/upload?path=${encodeURIComponent(fileDir)}`, fd, true);
+    done++;
+  }
+
+  prog.style.setProperty('--pct', '100%');
+  label.textContent = 'Done';
+  setTimeout(() => {
+    bar.classList.add('hidden');
+    prog.style.setProperty('--pct', '0%');
+    navigate(currentPath);
+  }, 800);
+}
 
 async function uploadFiles(files) {
   if (!files.length) return;
@@ -365,12 +456,54 @@ async function uploadFiles(files) {
   const prog  = document.getElementById('upload-progress');
   const label = document.getElementById('upload-label');
   bar.classList.remove('hidden');
-  const fd = new FormData();
-  for (const f of files) fd.append('files', f);
-  label.textContent = `Uploading ${files.length} file(s)…`;
-  prog.style.setProperty('--pct', '30%');
-  await api('POST', `/api/upload?path=${encodeURIComponent(currentPath)}`, fd, true);
-  prog.style.setProperty('--pct', '100%');
+
+  const hasFolderStructure = Array.from(files).some(f => f.webkitRelativePath && f.webkitRelativePath.includes('/'));
+
+  if (!hasFolderStructure) {
+    // Flat file upload — original behaviour
+    const fd = new FormData();
+    for (const f of files) fd.append('files', f);
+    label.textContent = `Uploading ${files.length} file(s)...`;
+    prog.style.setProperty('--pct', '30%');
+    await api('POST', `/api/upload?path=${encodeURIComponent(currentPath)}`, fd, true);
+    prog.style.setProperty('--pct', '100%');
+  } else {
+    // Folder upload — create subdirs, then upload each file to its path
+    const total = files.length;
+    let done = 0;
+
+    // Collect unique intermediate directory paths, sorted shallowest first
+    const dirs = new Set();
+    for (const f of files) {
+      const parts = f.webkitRelativePath.split('/');
+      for (let i = 1; i < parts.length; i++) {
+        dirs.add(currentPath.replace(/\/$/, '') + '/' + parts.slice(0, i).join('/'));
+      }
+    }
+    const sortedDirs = Array.from(dirs).sort((a, b) => a.split('/').length - b.split('/').length);
+
+    label.textContent = 'Creating folders...';
+    prog.style.setProperty('--pct', '10%');
+    for (const dir of sortedDirs) {
+      await post('/api/mkdir', { path: dir }).catch(() => {});
+    }
+
+    // Upload each file one by one to its target subdirectory
+    for (const f of files) {
+      const parts   = f.webkitRelativePath.split('/');
+      const fileDir = parts.length > 1
+        ? currentPath.replace(/\/$/, '') + '/' + parts.slice(0, -1).join('/')
+        : currentPath;
+      const fd = new FormData();
+      fd.append('files', f);
+      label.textContent = `Uploading ${done + 1} / ${total}: ${f.name}`;
+      prog.style.setProperty('--pct', Math.round(10 + (done / total) * 88) + '%');
+      await api('POST', `/api/upload?path=${encodeURIComponent(fileDir)}`, fd, true);
+      done++;
+    }
+    prog.style.setProperty('--pct', '100%');
+  }
+
   label.textContent = 'Done';
   setTimeout(() => {
     bar.classList.add('hidden');

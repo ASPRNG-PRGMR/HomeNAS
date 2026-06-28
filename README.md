@@ -25,6 +25,7 @@ The USP is that it's not just a NAS with logging bolted on — the security plat
 ## What it is
 
 - **NAS:** browse, upload, download, rename, move, and drag-to-move files and folders from any browser on your Tailscale network
+- **Folder upload:** upload entire directory trees from the browser — via picker or drag-and-drop — with directory structure preserved
 - **Audit log:** every auth event and filesystem action recorded to a local SQLite database, append-only, never mutated
 - **Real-time detection:** 12 rules covering brute-force login (BF-001 through BF-006) and mass-delete (MD-001 through MD-006), running within 250ms of each action
 - **SOC dashboard:** Overview, Alert management, Event explorer, and investigation timelines — all in the same browser tab as the file manager
@@ -73,8 +74,7 @@ HomeNAS/
 │   └── config.json
 │
 ├── webui/
-│   ├── index.html                      — shell, nav (#nav-inner centring wrapper),
-│   │                                     tab panes, path bar (in #tab-files, not nav)
+│   ├── index.html
 │   ├── style.css
 │   └── app.js
 │
@@ -84,6 +84,7 @@ HomeNAS/
 ├── systemd/
 │   └── nas-backend.service
 │
+├── build_deploy.sh                     — local build, deploy, and browser-launch script
 └── setup.sh
 ```
 
@@ -133,7 +134,7 @@ Directory deletes count toward all rules — deleting one top-level folder conta
 
 Four tabs, always accessible from the same browser session as the file manager:
 
-- **Overview** — severity cards (open alert counts), events today, auth failure count, recent alerts, live activity feed, top source IPs and actors with proportional failure bars. Severity cards are clickable — click Critical to jump straight to the filtered alert list.
+- **Overview** — severity cards (open alert counts), events today, auth failure count, recent alerts, live activity feed, top source IPs and actors with proportional failure bars. Severity cards are clickable — click Critical to jump straight to the filtered alert list. The Alerts tab pulses with a glow matching the highest open severity: red for critical, orange for high, yellow for medium, green for low, faint green when clear.
 - **Alerts** — full alert list with severity/rule/status/date filters, inline expand showing evidence JSON, status action buttons (Mark Investigating / Dismiss / Reopen), and a ±10 minute investigation timeline showing all related events before and after the alert fired.
 - **Events** — full event log with type/result/user/date filters, inline expand showing every field including target path, secondary path, bytes transferred, and failure reason.
 - **Files** — the NAS file manager. Drag the `⠿` handle on any row to move it into another folder in the current directory, or drag it onto a breadcrumb segment in the path pill to move it up to a parent directory. Moves are recorded as `file.move` events and trigger mass-delete detection rules the same as any other deletion-class action.
@@ -233,6 +234,16 @@ echo "<tailscale-ip> nas.local" | sudo tee -a /etc/hosts
 
 Open `https://nas.local`. Accept the self-signed certificate warning.
 
+### Iterative development (build and deploy)
+
+After making changes to the backend, use `build_deploy.sh` to build, deploy, and relaunch in one step:
+
+```bash
+sudo bash build_deploy.sh
+```
+
+This stops the service, rebuilds with ninja in Release mode, replaces the deployed binary, restarts the service, and opens `nas.local` in Firefox. Web UI changes (`webui/`) take effect immediately after replacing the files in the NGINX serve directory — no rebuild needed.
+
 ### Useful commands
 
 ```bash
@@ -304,6 +315,10 @@ For bulk transfers SCP is faster than HTTP upload:
 ```bash
 scp largefile.mkv user@<tailscale-ip>:~/nas/nas_storage/
 ```
+
+### Folder upload — browser support
+
+Folder upload via picker (`webkitdirectory`) and drag-and-drop directory traversal (`webkitGetAsEntry`) are supported on all modern desktop browsers (Chrome, Firefox, Safari, Edge). iOS Safari does not support `webkitdirectory` — the folder picker option will be non-functional on mobile. Flat file upload and drag-and-drop of individual files are unaffected.
 
 ### JWT and session management
 

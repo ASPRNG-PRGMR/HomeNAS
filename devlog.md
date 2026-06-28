@@ -365,3 +365,83 @@ The path bar is no longer sticky; it scrolls with the file list. It uses `margin
 `webui/style.css` — `#nav-inner` centring container; removed absolute positioning from `#nav-tabs-left` and `#nav-right`; `#nav-centre` simplified to wordmark-only; `#path-bar` repositioned with `margin: 16px auto 0; width: fit-content`; reduced `tab-pane` margin-top and `main#file-list` padding-top; added `.drag-handle`, `.file-row.dragging`, `.file-row.drop-target`, `.crumb-drop-target`, `#path-home.crumb-drop-target` rules; mobile breakpoints updated for new nav column layout.
 
 `webui/app.js` — `renderFileList` adds `draggable="true"` and `<div class="drag-handle">` to each row; `attachDragHandlers()` wires all drag events; `_dragViaHandle` flag gates drag initiation to handle-only; `_dragSourcePath`/`_dragSourceName` exposed on `window`; `window._nasMove` exposed for inline script access.
+
+---
+
+## Phase 2.7 — UI Redesign + Folder Upload
+
+### Context
+
+Two separate problems addressed in this phase:
+
+1. The nav layout, while centred, had inconsistent visual language — the tab pill, wordmark, and sign-out button had different weights and border styles, making the nav feel like three unrelated elements rather than a coherent system.
+2. There was no way to upload an entire folder from the browser — only flat file uploads were supported.
+
+No backend changes in this phase. All changes are `webui/` only, plus `build_deploy.sh`.
+
+---
+
+### Nav redesign — bilateral symmetry
+
+**Problem:** A single 4-button pill on the left holding all four tabs, with sign-out as a bordered pill on the right. The left had significantly more visual weight than the right, making HOME NAS feel off-centre despite being geometrically centred.
+
+**Solution:** Split the four tabs into two equal pills — `[Files | Overview]` on the left, `[Alerts | Events]` on the right — flanking the wordmark symmetrically. Both pills are identical containers: same `background`, same `border: 1.5px solid #2a2e40`, same `border-radius: 12px`, same padding. HOME NAS sits on `position: absolute; left: 50%; transform: translateX(-50%)` inside `#nav-inner`, so it is mathematically centred between the two pills regardless of their content width.
+
+Sign-out moved out of the nav bar entirely. It is now a circular FAB (`position: fixed; bottom: 28px; left: 28px`) mirroring the upload FAB at `bottom: 28px; right: 28px`. This creates a second axis of symmetry — the two bottom-corner circles balance each other the same way the two nav pills balance each other. At rest the sign-out FAB is muted with a visible border; on hover it turns red with a faint glow, making the destructive action visually distinct without being aggressive at rest.
+
+**CSS:** `#nav-tabs-left` and `#nav-tabs-right` share the `.nav-pill` class. `#logout-btn.corner-fab` shares the same 46px circle geometry and tooltip pattern as `.fab`.
+
+---
+
+### Alert glow — per-severity colour
+
+**Problem:** Previous implementation used three glow classes (`glow-red`, `glow-yellow`, `glow-green`), collapsing critical and high into the same red, losing the distinction.
+
+**Fix:** Five classes: `glow-critical` (#e05252 red), `glow-high` (#e07d2a orange), `glow-medium` (#c9bb3a yellow), `glow-low` (#4caf7d green), `glow-none` (faint green). The fetch interceptor on `/api/alerts/stats/summary` now picks the highest open severity and assigns the exact matching class. If the highest open severity is HIGH, the alerts tab pulses orange — not red.
+
+---
+
+### Folder upload
+
+**Mechanism:** Two upload paths, selected from a small menu that appears above the upload FAB on click:
+
+- **Files** — opens the normal `<input type="file" multiple>` picker. Flat upload to `currentPath`, same behaviour as before.
+- **Folder** — opens `<input type="file" webkitdirectory multiple>`. The browser presents a directory picker and returns all files within it with `webkitRelativePath` set.
+
+**Upload logic (`uploadFlatList`):**
+
+1. Collect all unique intermediate directory paths from `webkitRelativePath` values, sorted shallowest-first.
+2. Call `POST /api/mkdir` on each. `FilesystemController::mkdir` uses `fs::create_directories` which is idempotent — no error if the directory already exists.
+3. Upload each file individually to its target subdirectory via `POST /api/upload?path=<fileDir>`, with a running counter in the progress bar (`Uploading 3 / 47: report.pdf`).
+
+**Drag-and-drop folder support:** The existing `drop` handler on `#auth-shell` is extended to check for `DataTransferItem.webkitGetAsEntry()`. If any dropped item is a directory entry, the handler recursively walks the tree using `FileSystemDirectoryReader.readEntries()` (called in a loop until it returns an empty batch — the API silently caps at 100 entries per call). The resolved flat file list, with synthetic `webkitRelativePath` values set via `Object.defineProperty`, is passed to `uploadFlatList`. Flat file drops retain the original `uploadFiles` path.
+
+This means: dragging a folder from the OS file manager onto the browser window uploads the entire tree with directory structure preserved. No picker interaction required.
+
+**Mobile:** `webkitdirectory` is not supported on iOS Safari. The folder menu option will either show an empty picker or be rejected by the OS. This is a browser limitation — not regressed from the previous release where folder upload was not supported at all. Flat file upload via picker and drag-and-drop file upload are unaffected on mobile.
+
+---
+
+### `build_deploy.sh`
+
+Added to the repository root. Automates the local build-and-deploy loop:
+
+1. Stops `nas-backend` via systemd.
+2. Runs `cmake` + `ninja` on `backend/` in Release mode.
+3. Replaces the deployed binary at `~/nas/nas_main/nas_backend`.
+4. Restarts `nas-backend`.
+5. Opens `nas.local` in Firefox under the current user's display session.
+
+Requires `sudo` — the systemd stop/start and binary copy need elevated privileges. The `$SUDO_USER` variable is used throughout to avoid writing files owned by root into the user's home directory.
+
+---
+
+### Files modified in Phase 2.7
+
+`webui/index.html` — split `#nav-tabs-left` into `#nav-tabs-left` + `#nav-tabs-right` with shared `.nav-pill` class; removed `#nav-right` wrapper; added `#logout-btn.corner-fab` as a fixed bottom-left element; added `#upload-menu` with Files/Folder options above `#fab-upload`; added `<input id="folder-input" webkitdirectory multiple>`; updated FAB wiring in inline script.
+
+`webui/style.css` — added `.nav-pill` shared container style; replaced single `#nav-tabs-left` grid layout with two flex pills; removed `#nav-right` / old `#logout-btn` rules; added `#logout-btn.corner-fab` with hover-red glow; added five `glow-*` keyframe animations replacing previous three; added `#upload-menu` pill styles.
+
+`webui/app.js` — replaced `glow-red/yellow/green` with `glow-critical/high/medium/low/none` in fetch interceptor; replaced `drop` handler with `webkitGetAsEntry` branch; added `readEntries()` recursive directory walker; added `uploadFlatList()` for structure-preserving uploads; added `folder-input` change handler calling `uploadFlatList`; `uploadFiles` retained unchanged for flat file uploads.
+
+`build_deploy.sh` — new file. Build, deploy, and browser-launch script for local development iteration.
