@@ -591,3 +591,82 @@ Originally the five sync icon states used an inconsistent mix of treatments (sta
 ### Known gap carried forward
 
 The stopgap portal listener (`python3 -m http.server`, forked/respawned by `SyncManager`) is explicitly not production-grade: no TLS, no auth beyond port secrecy, no self-supervision beyond the next daily rotation if it dies mid-window. This is documented prominently in the README's "Storage sync" section with an explicit warning banner, and is meant to be deleted in its entirety once a real sync engine exists and owns its own port/listener.
+
+---
+
+## Phase 3.2 — Cleanup, Lifecycle Hardening, Sync Architecture Decision
+
+### Fix 1 — af-rule dropdown missing PT/DX options
+
+The `af-rule` filter dropdown in the Alerts tab was never updated when PT-001/002 and DX-001/002/003 were added in Phase 2.7. The Rules tab content correctly listed all five new rules, but the dropdown only contained BF and MD entries. A user who received a PT-001 alert had no way to filter to it from the Alerts tab without using date as a workaround.
+
+Fix: five missing `<option>` entries added to the `af-rule` `<select>` in `index.html`. Zero backend involvement.
+
+Root cause worth noting for future rule additions: the `af-rule` dropdown and the Rules tab content are in separate sections of `index.html` with no structural relationship — adding a rule requires updating both independently. The three places that need touching when a new rule family is added: (1) the `af-rule` dropdown options, (2) the Rules tab rule table rows, (3) `AlertTypes.h` rule ID constants. The alert glow logic in `app.js` is severity-based not rule-ID-based, so it never needs touching.
+
+---
+
+### Issue 2 — Stopgap portal listener lifecycle gap
+
+The current `startPortalListener()` / `stopPortalListener()` implementation forks a `python3 -m http.server` child and records its PID. The gap: if the child dies between port rotations (OOM kill, crash, manual kill), `SyncManager` has no knowledge of this — `portalListenerPid_` holds a stale PID, `stopPortalListener()` may `kill()` a PID that has since been reassigned to a different process, and the portal link silently returns "connection refused" until the next 24h rotation spawns a fresh listener.
+
+**Decision: do not harden the stopgap.** The stopgap listener is scheduled for deletion when the real sync engine lands. Investing engineering time in lifecycle hardening for something that will be deleted is waste. The minimum viable workaround if the listener dies before then: `sudo systemctl restart nas-backend` respawns it. This is acceptable for a development-phase stopgap used by one person.
+
+For reference, the correct fix if the stopgap needed to survive longer would be: call `kill(portalListenerPid_, 0)` (signal 0 = liveness probe, no actual signal sent) in `maybeRotatePort()` before attempting `stopPortalListener()`, and skip the kill if the process is already gone. The zombie reaping problem is solved by setting `SIGCHLD` to `SIG_IGN` in `main.cpp`, which makes the kernel auto-reap child processes without requiring `waitpid()` calls that would block the sync thread.
+
+---
+
+### Issue 3 — Sync architecture definition
+
+"Sync" has been undefined since Phase 3. The scaffolding (SyncManager, SyncController, the portal, port rotation) exists but has no real engine because the architecture was never settled. This is the decision.
+
+**Options considered and ruled out:**
+
+- **Sync to cloud (S3, Backblaze, rclone):** Requires internet, third-party dependency, breaks the "no cloud, no subscription" principle. Ruled out.
+- **Sync between two HomeNAS instances (peer-to-peer):** Requires both nodes online simultaneously, conflict resolution, and a Tailscale node discovery mechanism. Distributed systems scope, wrong for a personal NAS. Ruled out.
+- **Sync a client folder to nas_storage over Tailscale:** This is Syncthing. Not building a custom Syncthing. `rsync` over SSH already handles this without NAS involvement. Ruled out.
+
+**Decision: sync means one-way backup of nas_storage to a configured local path.**
+
+The real engine will walk `nas_storage` and a configured `backup_root`, compare file trees (mtime + size as fast path, SHA-256 as fallback), and copy new/changed files to `backup_root`. Deletions in `nas_storage` are intentionally not mirrored to `backup_root` — the backup is a safety net, not a mirror. If ransomware wipes `nas_storage`, the backup survives a sync run intact.
+
+Each run's outcome (files copied, bytes transferred, duration, errors) is persisted to `sync.db` (SQLite, WAL mode, same pattern as `events.db`). The current in-memory `std::deque<SyncLogEntry>` is replaced by this.
+
+**What gets deleted from the existing scaffolding:**
+
+- `startMockSync()` / `advanceMockSync()` — replaced by real file-tree walk.
+- `std::deque<SyncLogEntry>` — replaced by `sync.db`.
+- The stopgap `python3 -m http.server` portal listener — deleted. The sync portal becomes a static page served by NGINX alongside the main dashboard, inheriting its TLS and JWT auth.
+- Port rotation (`rotatePort()`, `maybeRotatePort()`, the full rotating-port security model) — deleted. The rotating port was premised on the portal being a separate unauthenticated server; NGINX serving it makes this irrelevant.
+
+**What survives:**
+
+- `SyncManager` singleton — becomes the real engine owner.
+- `SyncController` — API surface (`GET /api/sync/status`, `POST /api/sync/start`, `POST /api/sync/pause`) unchanged. Frontend doesn't change.
+- The five sync state animations — unchanged, correctly model the state machine.
+- Telegram notification hook — wired at `sync.complete` / `sync.error` as part of Phase 2.56.
+
+**New config shape:**
+```json
+"sync": {
+  "backup_root": "/mnt/backup_drive/nas_backup",
+  "schedule_cron": "0 3 * * *",
+  "delete_from_backup": false,
+  "telegram_bot_token": "",
+  "telegram_chat_id": ""
+}
+```
+
+`schedule_cron` replaces the current 24h hardcoded interval. `delete_from_backup: false` is the safe default — user must opt in to mirrored deletions explicitly.
+
+**Implementation order for next phase:**
+
+1. Delete the stopgap listener and port rotation machinery from `SyncManager`.
+2. Add `sync.db` with a `sync_runs` table (same WAL pattern as `events.db`).
+3. Implement file-tree walk and copy engine in `SyncManager`.
+4. Wire Telegram notifications at `sync.complete` / `sync.error`.
+5. Update NGINX config to serve `sync-portal/` under `/sync/` on the main domain.
+
+### Files modified in Phase 3.2
+
+`webui/index.html` — added PT-001, PT-002, DX-001, DX-002, DX-003 to the `af-rule` filter dropdown in the Alerts tab.

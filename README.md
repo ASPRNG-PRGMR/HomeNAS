@@ -169,25 +169,17 @@ Four tabs, always accessible from the same browser session as the file manager:
 
 The dashboard polls every 15 seconds. The alert badge on the Alerts tab shows the live open alert count.
 
-### Storage sync ⚠️ preview / stopgap — not production-grade
+### Storage sync ⚠️ engine not yet built — scaffolding only
 
-> **This feature is scaffolding, not a finished sync engine.** The icon, status API, and standalone landing page are real and wired against a real background thread — but there is no actual file-sync engine behind any of it yet, and the mechanism currently making the landing page reachable at all is an explicit, temporary stopgap (see below). Treat everything in this section as a development preview, not something to depend on for actual data synchronization.
+> **This feature is scaffolding, not a finished sync engine.** The icon, status API, and portal are real and wired against a real background thread, but the actual file-sync engine does not exist yet — progress/ETA are simulated, and the stopgap portal listener is scheduled for deletion. The sync architecture has been decided (see below and the devlog Phase 3.2 entry) and the real engine is next on the implementation list.
 
-A sync status icon sits bottom-left, above the sign-out button. It reflects one of five states — idle, syncing, paused, error, or hash mismatch — each shown as a colour-coded fade animation matching the same visual language as the Alerts tab's severity glow (idle fades faint green, paused fades amber, error fades red on a slow 2.5s cycle, hash-mismatch fades orange on a faster, sharper cycle so the two failure modes don't read as the same thing, and syncing spins in accent blue). Hovering shows live progress and ETA, or the last-verified hash age when idle.
+A sync status icon sits bottom-left, above the sign-out button. It reflects one of five states — idle, syncing, paused, error, or hash mismatch — shown as colour-coded fade animations matching the Alerts tab's severity glow language (idle fades green, paused fades amber, error fades red on a 2.5s cycle, hash-mismatch fades orange on a faster sharper cycle, syncing spins in accent blue). Hovering shows live status and last-verified hash age.
 
-Clicking the icon during normal operation (idle/syncing/paused) opens a separate sync landing page in a new tab — `sync-portal/`, a standalone page with no shared code or styling with the main dashboard. It's intentionally a different surface: the sync engine that will eventually drive it is designed to run on its own port, rotated daily, with no authentication of its own — reachability via a freshly-issued link from the authenticated main dashboard is the access control. Clicking the icon during an error or hash-mismatch state instead expands an inline logs panel in the main dashboard, without leaving it.
+**Hash verification** is real: `SyncManager` periodically walks `nas_storage` and computes an aggregate integrity hash. If the hash changes between checks while no sync was running, the state flips to hash-mismatch — the one state the backend can enter on its own, without a sync engine reporting anything.
 
-**Hash verification** is real: the backend (`SyncManager`) periodically walks `nas_storage` and computes an aggregate integrity hash, independent of whether a sync is in progress. If the hash changes between checks while no sync was running, that's treated as drift HomeNAS can't account for and the state flips to hash-mismatch — this is the one state the backend can enter on its own, separately from anything a sync engine itself would report.
+**What's mocked:** the sync engine itself. Progress/ETA are simulated by `SyncManager` advancing a percentage on a timer.
 
-**What's mocked:** the sync engine itself doesn't exist. Sync progress/ETA shown by the icon and portal are simulated by `SyncManager` advancing a percentage on a timer, not driven by any real file transfer.
-
-**The stopgap portal listener — read this before relying on it:** because no real sync service exists to bind the daily-rotating port, `SyncManager` currently forks a bare `python3 -m http.server` process and points it at `sync-portal/` on whatever port it just rotated to, purely so the landing page is reachable for development/testing rather than always 404ing. This is a deliberate, temporary hack with real limitations:
-- **No TLS.** The portal is served over plain HTTP, not HTTPS — unlike the main dashboard. The sync icon's click handler deliberately forces `http://` for this link rather than matching the main page's `https://`, specifically because of this.
-- **No real auth beyond port secrecy.** Anyone who learns the current port within its 24h window can reach the portal — by design, per the "rotating port is the access boundary" model — but there's no deeper protection layered on top the way a production sync service might add.
-- **Restart-fragile by nature of being a stopgap.** The forked process is detached and `KillMode=process` in the systemd unit specifically protects it from being killed alongside `nas-backend` restarts, but it has no supervision of its own — if it dies between rotations for any other reason, it stays dead until the next daily rotation.
-- **No real file-transfer behind it.** The portal shows status/ETA/hash info, all sourced from the same mocked `SyncManager` data the main dashboard polls — it is not actually moving any files.
-
-This entire block — `startPortalListener()`/`stopPortalListener()` in `SyncManager`, the `python3`/firewall-range additions in `setup.sh`, and `KillMode=process` in the systemd unit — exists to do one job: make the landing page openable today. It is explicitly meant to be deleted once a real sync engine exists and owns its own port and listener lifecycle. See the devlog for the full reasoning.
+**What sync will actually do (decided in Phase 3.2):** one-way backup of `nas_storage` to a configured local path — typically a second drive. New and changed files are copied. Deletions in `nas_storage` are not automatically mirrored to the backup (`delete_from_backup: false` by default) — the backup is a safety net, not a mirror. Each run's outcome is persisted to `sync.db`. The sync portal moves from a separately-bound listener to NGINX-served static content under `/sync/` on the main domain, inheriting TLS and JWT auth. The stopgap `python3 -m http.server` listener and the daily port-rotation machinery are deleted in the next phase.
 
 ### Data storage
 
@@ -346,14 +338,30 @@ sudo ausearch -m avc -ts recent | audit2why
     "admin_password":     "CHANGE THIS",
     "events_db_path":     "~/nas/nas_storage/.nas-meta/events.db",
     "alerts_db_path":     "~/nas/nas_storage/.nas-meta/alerts.db",
+    "trusted_ips": [
+      "127.0.0.1",
+      "::1"
+    ],
     "sync": {
-      "hash_check_interval_seconds":    300,
-      "port_rotation_interval_seconds": 86400,
-      "portal_dir": "~/nas/nas_main/sync-portal"
+      "backup_root":        "/mnt/backup_drive/nas_backup",
+      "schedule_cron":      "0 3 * * *",
+      "delete_from_backup": false,
+      "telegram_bot_token": "",
+      "telegram_chat_id":   ""
     }
   }
 }
 ```
+
+`trusted_ips` — IPs exempt from all IP-keyed detection rules (BF and PT families). `127.0.0.1` and `::1` are always exempt regardless of this list. Add your Tailscale IP (`tailscale ip -4`) to avoid triggering brute-force alerts on your own login attempts.
+
+`sync.backup_root` — local path to back up to. Must be writable by the `nas-backend` service user. Typically a second drive mounted under `/mnt/`.
+
+`sync.schedule_cron` — when to run automatic backups. `0 3 * * *` = 3am daily.
+
+`sync.delete_from_backup` — if `false` (default), files deleted from `nas_storage` are never removed from `backup_root`. Set `true` only if you want a strict mirror rather than a safety-net backup.
+
+`sync.telegram_bot_token` / `sync.telegram_chat_id` — leave empty to disable notifications. To enable: create a bot via @BotFather, get your chat ID via @userinfobot, fill both fields and restart.
 
 ---
 
@@ -382,19 +390,19 @@ scp largefile.mkv user@<tailscale-ip>:~/nas/nas_storage/
 
 Folder upload via picker (`webkitdirectory`) and drag-and-drop directory traversal (`webkitGetAsEntry`) are supported on all modern desktop browsers (Chrome, Firefox, Safari, Edge). iOS Safari does not support `webkitdirectory` — the folder picker option will be non-functional on mobile. Flat file upload and drag-and-drop of individual files are unaffected.
 
+### Trusted IPs and self-triggering alerts
+
+Detection rules BF-001 through BF-006 and PT-001/002 are IP-keyed. If you mistype your password from localhost or your Tailscale IP, you will trigger BF alerts against yourself. Add those IPs to `trusted_ips` in `config.json` and restart to exempt them permanently.
+
 ### JWT and session management
 
 JWTs are stateless — logout is client-side only. To invalidate all active sessions immediately, rotate `jwt_secret` and restart the backend. Passwords are stored as plaintext in `config.json`, acceptable for personal single-user use on a private Tailscale network.
-
-### Storage sync stopgap listener
-
-The sync portal's reachability currently depends on a forked `python3 -m http.server` process spawned and rotated by `SyncManager` — not a hardened or supervised service. It has no TLS, relies entirely on port secrecy for access control, and has no restart logic of its own beyond what `SyncManager` does on the next daily rotation. See "Storage sync" above for the full breakdown. This exists purely so the feature is testable before the real sync engine is built — don't point real data at it.
 
 ---
 
 ## Roadmap
 
-- **Storage Sync — real engine:** the sync icon, status/logs API, and standalone landing page (`sync-portal/`) are built and wired to a real background hashing + port-rotation thread, but the actual file-sync engine (the thing that moves data) doesn't exist yet — progress/ETA are simulated, and the portal is currently reachable only via a stopgap unsupervised listener (see "Storage sync" above). Building the real engine, and replacing the stopgap with whatever the real engine's own listener turns out to be, is next.
+- **Storage Sync — real engine (next):** architecture decided in Phase 3.2 — one-way backup of `nas_storage` to a configured local path. Deletes the stopgap listener and port rotation, adds `sync.db` for run persistence, wires Telegram notifications, moves the portal to NGINX. See devlog Phase 3.2 for full decision record.
 - **Phase 2.55 — SOAR:** Manual response actions from the dashboard: block IP, invalidate sessions, disable user account.
-- **Phase 2.56 — Notifications:** Email alerts on high/critical severity triggers.
+- **Phase 2.56 — Notifications:** Telegram alerts on high/critical severity triggers and sync completion/failure. Bot token and chat ID configurable in `config.json`.
 - **Phase 3 — Storage Intelligence:** Duplicate detection, stale file identification, storage usage trends.
