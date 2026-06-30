@@ -14,12 +14,28 @@ RestartSec=5s
 # Resource limits
 LimitNOFILE=65536
 
+# KillMode=process (not the default control-group): nas_backend forks a
+# detached stopgap static-file listener for the sync portal (see
+# SyncManager::startPortalListener) that's meant to keep serving across
+# backend restarts — daily port rotation, not a "stop the world" event.
+# With the default control-group KillMode, every `systemctl restart
+# nas-backend` would SIGKILL that child too, leaving the sync portal
+# unreachable until the next rotation (up to 24h later). process only
+# signals the main PID; setsid() in the child already detaches it from
+# the parent's process group, so it survives independently either way —
+# this just stops systemd from reaching into the cgroup to kill it anyway.
+KillMode=process
+
 # Hardening
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=false
+# sync-portal/ must be readable (not just nas_storage/logs/tmp_uploads) —
+# the forked python3 http.server child serves static files from here.
+# Read-only is sufficient; nothing writes into this directory at runtime.
 ReadWritePaths=_home_/nas/nas_storage _home_/nas/nas_main/logs _home_/nas/nas_main/tmp_uploads
+ReadOnlyPaths=_home_/nas/nas_main/sync-portal
 
 [Install]
 WantedBy=multi-user.target

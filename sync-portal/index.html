@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>HomeNAS — Sync</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <div id="portal-shell">
+
+    <header id="portal-header">
+      <div id="portal-wordmark">HOME NAS <span id="portal-wordmark-sub">/ SYNC</span></div>
+      <div id="portal-conn-status">
+        <span class="conn-dot" id="conn-dot"></span>
+        <span id="conn-label">Connecting…</span>
+      </div>
+    </header>
+
+    <!-- Connection status: this page has no auth of its own — reachability
+         via the daily-rotating port IS the access control. If the main
+         HomeNAS API stops responding, this page can't tell whether that's
+         because the port rotated (expected, daily) or something is wrong,
+         so it just reports "disconnected" either way and lets the user
+         re-open the link from the main dashboard, which always has the
+         current port. -->
+
+    <main id="portal-main">
+
+      <section class="portal-card" id="card-sync-status">
+        <div class="portal-card-title">Sync Status</div>
+        <div class="status-row">
+          <span class="status-badge" id="sync-state-badge">—</span>
+          <span id="sync-state-detail"></span>
+        </div>
+        <div id="progress-wrap" class="hidden">
+          <div id="progress-track"><div id="progress-fill"></div></div>
+          <div id="progress-label"></div>
+        </div>
+      </section>
+
+      <section class="portal-card-grid">
+        <div class="portal-card">
+          <div class="portal-card-title">ETA</div>
+          <div class="portal-stat" id="stat-eta">—</div>
+        </div>
+        <div class="portal-card">
+          <div class="portal-card-title">Last Hash Verified</div>
+          <div class="portal-stat portal-stat-mono" id="stat-hash">—</div>
+          <div class="portal-stat-sub" id="stat-hash-time"></div>
+        </div>
+        <div class="portal-card">
+          <div class="portal-card-title">Sync Port</div>
+          <div class="portal-stat portal-stat-mono" id="stat-port">—</div>
+          <div class="portal-stat-sub" id="stat-port-rotated"></div>
+        </div>
+      </section>
+
+      <!-- Error/issues panel — only shown when state is error or hash_mismatch.
+           Expands above the files list, per the design: "during error,
+           there is a logs tab that expands ... below it the usual thing
+           shown from normal operation — files." -->
+      <section class="portal-card hidden" id="card-issues">
+        <div class="portal-card-title">
+          Issues
+          <button id="issues-toggle" class="issues-toggle-btn">Hide</button>
+        </div>
+        <div id="issues-body"></div>
+      </section>
+
+      <section class="portal-card">
+        <div class="portal-card-title">Files</div>
+        <div id="portal-files"><div class="portal-loading">Loading…</div></div>
+      </section>
+
+    </main>
+
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

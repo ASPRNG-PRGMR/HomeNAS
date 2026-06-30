@@ -25,10 +25,14 @@
     <!-- Top nav bar -->
     <nav id="top-nav">
       <div id="nav-inner">
-        <!-- Left pill: Files + Overview -->
+        <!-- Left pill: Files, Overview, Alerts -->
         <div id="nav-tabs-left" class="nav-pill">
           <button class="nav-tab active" data-tab="files">&#128193; Files</button>
           <button class="nav-tab"        data-tab="overview">&#9711; Overview</button>
+          <button class="nav-tab"        data-tab="alerts">
+            &#9888; Alerts
+            <span id="nav-alert-count" class="nav-alert-badge hidden">0</span>
+          </button>
         </div>
 
         <!-- Centre: wordmark only -->
@@ -36,26 +40,29 @@
           <div id="nav-wordmark">HOME NAS</div>
         </div>
 
-        <!-- Right pill: Alerts + Events -->
+        <!-- Right pill: Rules, Logs -->
         <div id="nav-tabs-right" class="nav-pill">
-          <button class="nav-tab" data-tab="alerts">
-            &#9888; Alerts
-            <span id="nav-alert-count" class="nav-alert-badge hidden">0</span>
-          </button>
-          <button class="nav-tab" data-tab="events">&#8801; Events</button>
+          <button class="nav-tab" data-tab="rules">&#9881; Rules</button>
+          <button class="nav-tab" data-tab="logs">&#9783; Logs</button>
         </div>
       </div>
     </nav>
 
-    <!-- Bottom-left: sign out FAB -->
+    <!-- Sync logs panel — shown when sync icon is clicked in error/hash-mismatch state -->
+    <div id="sync-logs-panel" class="hidden">
+      <div id="sync-logs-header">
+        <span id="sync-logs-title">Sync Issues</span>
+        <button id="sync-logs-close" title="Close">&#10005;</button>
+      </div>
+      <div id="sync-logs-body"></div>
+    </div>
+
+    <!-- Bottom-left: sync status + sign out FABs -->
+    <button id="sync-btn" class="corner-fab" data-tip="Idle" title="Sync status">&#8635;</button>
     <button id="logout-btn" class="corner-fab" data-tip="Sign out" title="Sign out">&#9099;</button>
 
     <!-- Bottom-right: FAB cluster (files tab only) -->
     <div id="fab-cluster" class="hidden">
-      <div id="upload-menu" class="hidden">
-        <button id="upload-menu-folder">&#128193; Folder</button>
-        <button id="upload-menu-files">&#128196; Files</button>
-      </div>
       <button id="fab-folder" class="fab" data-tip="New folder">&#128193;</button>
       <button id="fab-upload" class="fab" data-tip="Upload">&#8593;</button>
     </div>
@@ -87,7 +94,6 @@
       </div>
 
       <input type="file" id="file-input" multiple style="display:none">
-      <input type="file" id="folder-input" webkitdirectory multiple style="display:none">
     </div>
 
     <!--  Overview tab  -->
@@ -220,8 +226,173 @@
       </div>
     </div>
 
-    <!--  Events tab  -->
-    <div id="tab-events" class="tab-pane hidden">
+    <!--  Rules tab  -->
+    <div id="tab-rules" class="tab-pane hidden">
+      <div class="dash-screen">
+
+        <div class="rules-intro">
+          Detection rules run automatically after every event batch. Each rule fires an alert when its condition is met and respects a cooldown period to avoid flooding the alert table during a sustained attack.
+        </div>
+
+        <!-- Brute Force -->
+        <div class="rules-group">
+          <div class="rules-group-header">
+            <span class="rules-group-title">Brute Force (BF)</span>
+            <span class="rules-group-sub">IP-keyed &mdash; triggered by login failure patterns from a single source IP</span>
+          </div>
+          <div class="rules-table">
+            <div class="rules-row rules-header">
+              <span>Rule</span><span>Condition</span><span>Window</span><span>Severity</span>
+            </div>
+            <div class="rules-row">
+              <span class="rule-id">BF-001</span>
+              <span class="rule-desc">5 or more login failures from the same IP</span>
+              <span class="rule-window">60s</span>
+              <span class="sev-pill low">Low</span>
+            </div>
+            <div class="rules-row">
+              <span class="rule-id">BF-002</span>
+              <span class="rule-desc">10 or more login failures from the same IP</span>
+              <span class="rule-window">60s</span>
+              <span class="sev-pill medium">Medium</span>
+            </div>
+            <div class="rules-row">
+              <span class="rule-id">BF-003</span>
+              <span class="rule-desc">20 or more login failures from the same IP</span>
+              <span class="rule-window">60s</span>
+              <span class="sev-pill high">High</span>
+            </div>
+            <div class="rules-row">
+              <span class="rule-id">BF-004</span>
+              <span class="rule-desc">50 or more failures in 5 min, or 100 or more in 15 min from same IP</span>
+              <span class="rule-window">5&ndash;15 min</span>
+              <span class="sev-pill critical">Critical</span>
+            </div>
+            <div class="rules-row">
+              <span class="rule-id">BF-005</span>
+              <span class="rule-desc">10 or more failures followed by a successful login from the same IP &mdash; attacker may have gained access</span>
+              <span class="rule-window">10 min</span>
+              <span class="sev-pill high">High</span>
+            </div>
+            <div class="rules-row">
+              <span class="rule-id">BF-006</span>
+              <span class="rule-desc">Same username targeted from 3 or more distinct IPs &mdash; distributed password spraying</span>
+              <span class="rule-window">5 min</span>
+              <span class="sev-pill medium">Medium</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Mass Delete -->
+        <div class="rules-group">
+          <div class="rules-group-header">
+            <span class="rules-group-title">Mass Delete (MD)</span>
+            <span class="rules-group-sub">Actor-keyed &mdash; triggered by deletion patterns from an authenticated user. Directory deletes count the same as file deletes.</span>
+          </div>
+          <div class="rules-table">
+            <div class="rules-row rules-header">
+              <span>Rule</span><span>Condition</span><span>Window</span><span>Severity</span>
+            </div>
+            <div class="rules-row">
+              <span class="rule-id">MD-001</span>
+              <span class="rule-desc">20 or more deletes by the same user</span>
+              <span class="rule-window">60s</span>
+              <span class="sev-pill low">Low</span>
+            </div>
+            <div class="rules-row">
+              <span class="rule-id">MD-002</span>
+              <span class="rule-desc">50 or more deletes by the same user</span>
+              <span class="rule-window">60s</span>
+              <span class="sev-pill medium">Medium</span>
+            </div>
+            <div class="rules-row">
+              <span class="rule-id">MD-003</span>
+              <span class="rule-desc">100 or more deletes by the same user</span>
+              <span class="rule-window">5 min</span>
+              <span class="sev-pill high">High</span>
+            </div>
+            <div class="rules-row">
+              <span class="rule-id">MD-004</span>
+              <span class="rule-desc">500 or more deletes by the same user &mdash; possible ransomware wipe</span>
+              <span class="rule-window">10 min</span>
+              <span class="sev-pill critical">Critical</span>
+            </div>
+            <div class="rules-row">
+              <span class="rule-id">MD-005</span>
+              <span class="rule-desc">Login followed immediately by 50 or more deletes &mdash; possible compromised account</span>
+              <span class="rule-window">5 min</span>
+              <span class="sev-pill high">High</span>
+            </div>
+            <div class="rules-row">
+              <span class="rule-id">MD-006</span>
+              <span class="rule-desc">Any directory deletion &mdash; fires on every occurrence, no cooldown</span>
+              <span class="rule-window">Per event</span>
+              <span class="sev-pill medium">Medium</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Path Traversal -->
+        <div class="rules-group">
+          <div class="rules-group-header">
+            <span class="rules-group-title">Path Traversal (PT)</span>
+            <span class="rules-group-sub">IP-keyed &mdash; triggered when requests attempt to access paths outside the storage root (e.g. <code>../../etc/passwd</code>). One or two occurrences may be a misconfigured client; a burst indicates active probing.</span>
+          </div>
+          <div class="rules-table">
+            <div class="rules-row rules-header">
+              <span>Rule</span><span>Condition</span><span>Window</span><span>Severity</span>
+            </div>
+            <div class="rules-row">
+              <span class="rule-id">PT-001</span>
+              <span class="rule-desc">5 or more path traversal attempts from the same IP</span>
+              <span class="rule-window">60s</span>
+              <span class="sev-pill medium">Medium</span>
+            </div>
+            <div class="rules-row">
+              <span class="rule-id">PT-002</span>
+              <span class="rule-desc">20 or more path traversal attempts from the same IP &mdash; sustained directory probing</span>
+              <span class="rule-window">5 min</span>
+              <span class="sev-pill high">High</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Data Exfiltration -->
+        <div class="rules-group">
+          <div class="rules-group-header">
+            <span class="rules-group-title">Data Exfiltration (DX)</span>
+            <span class="rules-group-sub">Actor-keyed &mdash; triggered by abnormal download volume from an authenticated user. Keyed on actor, not IP, so rotating exit nodes does not evade detection.</span>
+          </div>
+          <div class="rules-table">
+            <div class="rules-row rules-header">
+              <span>Rule</span><span>Condition</span><span>Window</span><span>Severity</span>
+            </div>
+            <div class="rules-row">
+              <span class="rule-id">DX-001</span>
+              <span class="rule-desc">50 or more file downloads by the same user</span>
+              <span class="rule-window">5 min</span>
+              <span class="sev-pill medium">Medium</span>
+            </div>
+            <div class="rules-row">
+              <span class="rule-id">DX-002</span>
+              <span class="rule-desc">200 or more file downloads by the same user</span>
+              <span class="rule-window">10 min</span>
+              <span class="sev-pill high">High</span>
+            </div>
+            <div class="rules-row">
+              <span class="rule-id">DX-003</span>
+              <span class="rule-desc">Login followed immediately by 30 or more downloads &mdash; possible stolen credential being used to exfiltrate data</span>
+              <span class="rule-window">5 min</span>
+              <span class="sev-pill high">High</span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!--  Logs tab (formerly Events)  -->
+    <div id="tab-logs" class="tab-pane hidden">
       <div class="dash-screen">
         <div class="filters-row" id="events-filters">
           <select id="ef-type">
@@ -289,21 +460,8 @@
   (function () {
 
     //  FABs 
-    document.getElementById('fab-upload').addEventListener('click', (e) => {
-      e.stopPropagation();
-      document.getElementById('upload-menu').classList.toggle('hidden');
-    });
-    document.getElementById('upload-menu-files').addEventListener('click', () => {
-      document.getElementById('upload-menu').classList.add('hidden');
-      document.getElementById('file-input').click();
-    });
-    document.getElementById('upload-menu-folder').addEventListener('click', () => {
-      document.getElementById('upload-menu').classList.add('hidden');
-      document.getElementById('folder-input').click();
-    });
-    document.addEventListener('click', () => {
-      document.getElementById('upload-menu').classList.add('hidden');
-    });
+    document.getElementById('fab-upload').addEventListener('click', () =>
+      document.getElementById('upload-btn').click());
     document.getElementById('fab-folder').addEventListener('click', () =>
       document.getElementById('new-folder-btn').click());
 

@@ -445,3 +445,149 @@ Requires `sudo` — the systemd stop/start and binary copy need elevated privile
 `webui/app.js` — replaced `glow-red/yellow/green` with `glow-critical/high/medium/low/none` in fetch interceptor; replaced `drop` handler with `webkitGetAsEntry` branch; added `readEntries()` recursive directory walker; added `uploadFlatList()` for structure-preserving uploads; added `folder-input` change handler calling `uploadFlatList`; `uploadFiles` retained unchanged for flat file uploads.
 
 `build_deploy.sh` — new file. Build, deploy, and browser-launch script for local development iteration.
+
+---
+
+## Phase 2.8 — Path Traversal / Data Exfiltration Rules + Rules Tab
+
+### Context
+
+PT-001/002 and DX-001/002/003 were specified in design docs and partially wired (header declarations, dispatch calls in `EventAnalyzer::analyze()`, evidence-building conventions matching BF/MD) but the rule bodies and two supporting query helpers were never written into `EventAnalyzer.cpp`. This shipped a linker error rather than a runtime bug — `ninja` failed at the link step with `undefined reference to EventAnalyzer::checkPT001_002(...)` and similarly for the two DX methods, since the symbols were declared and called but never defined.
+
+A second, smaller gap surfaced on the next build attempt: `RuleId::PT001` etc. were referenced in the new rule bodies but never added to the `RuleId` namespace in `AlertTypes.h` — only BF and MD constants existed there.
+
+### Rule implementations added
+
+**`checkPT001_002(ip)`** — IP-keyed, mirrors the BF threshold-table pattern exactly: an array of `{ruleId, severity, threshold, windowSecs, title, cooldownSecs}` rows, iterated in escalating order, fires the highest applicable rule only, then breaks. PT-001 (5 failures/60s, MEDIUM) and PT-002 (20 failures/5min, HIGH).
+
+**`checkDX001_002(actor)`** — actor-keyed, same table-driven pattern. Reuses the existing generic `countEvents("file.download", nullptr, actor, windowSecs)` helper rather than adding a redundant query — `file.download` + `result = 'success'` was already a supported `countEvents` call shape. DX-001 (50/5min, MEDIUM), DX-002 (200/10min, HIGH).
+
+**`checkDX003(actor, loginTs)`** — directly mirrors `checkMD005`'s "login followed by burst" shape: a single threshold (30 downloads within 5 minutes of `loginTs`), one cooldown, one alert. Matches MD-005's HIGH severity and 5-minute window precedent rather than inventing a new convention.
+
+### New query helpers
+
+**`countTraversalFailures(ip, windowSecs)`** — `SELECT COUNT(*) ... WHERE result='failure' AND failure_reason='path_traversal_or_forbidden' AND source_ip=? AND timestamp_utc >= datetime('now','-N seconds')`. This is the first analyzer query to filter on `failure_reason` rather than just `event_type`/`result` — the column already existed (used by Phase 1's path-traversal logging) but no detection rule had read it back out until now.
+
+**`countDownloadsAfterLogin(actor, loginTs, windowSecs)`** — structurally identical to `countDeletesAfterLogin`, swapping `event_type = 'file.delete'` for `event_type = 'file.download'` and `result = 'success'`. Window is computed forward from `loginTs` via SQLite `datetime(?, '+N seconds')`, same pattern as MD-005.
+
+### `AlertTypes.h` — RuleId constants
+
+Five `constexpr const char*` entries added to the existing `RuleId` namespace, immediately after `MD006`, matching the `"XX-NNN"` string format already used by every BF/MD constant: `PT001`, `PT002`, `DX001`, `DX002`, `DX003`.
+
+### Rules tab — dashboard documentation view
+
+A fifth nav tab (`#tab-rules`, gear icon) added between Alerts and Logs. Read-only — no API calls, no filters, no state. Renders the full rule catalogue (BF, MD, PT, DX) as four `.rules-group` blocks, each a header (title + one-line description of what the rule family is keyed on) followed by a `.rules-table` of `Rule | Condition | Window | Severity` rows using the same `sev-pill` component already used in the Alerts and Overview tabs, so severity colour coding is visually consistent across the whole dashboard.
+
+**Why static HTML instead of generating it from `RuleId` + thresholds at runtime:** the rule descriptions ("possible ransomware wipe", "rotating exit nodes does not evade detection") are human-authored context that doesn't exist as backend data — there's no `/api/rules` endpoint and adding one purely to avoid duplicating six lines of HTML per rule was judged not worth a new backend surface for a page that changes only when rules themselves change.
+
+**Mobile:** `.rules-row` collapses from a 4-column grid (`72px 1fr 90px 80px`) to a 2-column grid at ≤600px, hiding the Window column and left-aligning the severity pill onto its own line under the description — same collapse strategy as `.data-table`'s `col-hide-tablet` class elsewhere in the dashboard, applied via a dedicated breakpoint since `.rules-row` isn't a `<table>`.
+
+### Files added/modified in Phase 2.8
+
+**Modified (backend — rebuild required):**
+- `backend/services/EventAnalyzer.cpp` — added `checkPT001_002`, `checkDX001_002`, `checkDX003`, `countTraversalFailures`, `countDownloadsAfterLogin`. No changes to existing BF/MD code.
+- `backend/services/AlertTypes.h` — added `PT001`, `PT002`, `DX001`, `DX002`, `DX003` to the `RuleId` namespace.
+
+**Modified (webui only — no backend rebuild required):**
+- `webui/index.html` — added `#tab-rules` pane with four `.rules-group` blocks (BF, MD, PT, DX); added `Rules` nav tab button between Alerts and Logs; `af-rule` filter dropdown on the Alerts tab still only lists BF/MD options — **known gap, see below.**
+- `webui/style.css` — added `.rules-intro`, `.rules-group`, `.rules-group-header/-title/-sub`, `.rules-table`, `.rules-row` (incl. `.rules-header` variant), `.rule-id`, `.rule-desc`, `.rule-window`, and a `≤600px` collapse breakpoint.
+
+### Known gap carried forward
+
+The `af-rule` `<select>` on the Alerts tab filter bar was not updated to include `PT-001`/`PT-002`/`DX-001`/`DX-002`/`DX-003` as options. PT/DX alerts will still appear in the unfiltered alert list and are fully clickable/expandable — they just can't be isolated via the rule dropdown filter yet. Low priority since severity filtering already covers the common triage case (e.g. filter to High to see PT-002/DX-002/DX-003 together).
+
+---
+
+## Phase 3 — Storage Sync Scaffolding
+
+### Context
+
+Design called for a sync feature with a deliberately unusual security model, specified before any sync engine existed to drive it: a status icon on the main dashboard, and a separate landing page served on a port that rotates daily, reachable only via a freshly-issued link from the authenticated main dashboard rather than its own login. Goal: build everything around that model — icon, polling, API contract, standalone page — against a real background thread doing real work (hashing, port rotation), with mocked sync progress, so the actual sync engine can be dropped in later without re-architecting the UI or API.
+
+### Design decisions
+
+**Port ownership inverted:** initial framing had the sync service telling HomeNAS its port. Since no sync service exists, this was inverted — HomeNAS (`SyncManager::maybeRotatePort()`) generates and owns the port; a future sync engine would read it from HomeNAS rather than the reverse. Removes an entire IPC mechanism that had no real consumer yet.
+
+**Port persists rather than read-once-then-delete:** a consumed-once value would mean only the first reader gets a working link. Persisting it for the full rotation window means `/api/sync/status` can be polled freely and always returns a working link.
+
+**No auth on the portal itself:** per design, the rotating port plus a freshly-issued link from the authenticated dashboard *is* the access boundary, not a second login.
+
+**Hash-check is a periodic background thread, not folded into `EventAnalyzer`:** `EventAnalyzer` reacts to newly-written events; the sync hash-check needs to run on a wall-clock timer regardless of event activity, since an attacker modifying files directly on disk would never produce an event for `EventAnalyzer` to react to.
+
+**`SyncManager` owns its own thread** (EventWriter-style), rather than riding on `EventWriter`'s thread the way `EventAnalyzer` does — sync hashing has no natural trigger event to hang off of.
+
+**Hash algorithm is an aggregate signal, not cryptographic:** path+size+mtime combined via `hash_combine`, not full content hashing — reading every file's bytes on every check would make the integrity check itself a meaningful I/O cost on a NAS. `.nas-meta` is excluded from the walk since `events.db`/`alerts.db` mutate on every action (including the hash check's own log write), which would otherwise make the hash non-deterministic for reasons unrelated to user content.
+
+**Error vs. hash-mismatch are visually distinct, not a shared "red and pulsing":** hash-mismatch is the one state `SyncManager` can enter unilaterally (storage drift, no sync running) and was treated as more concerning than a generic sync failure, so it got a different colour and a faster, sharper animation rather than the same red fade as a generic error.
+
+**Mock sync progress and in-memory (non-SQLite) logs:** `startMockSync()`/`advanceMockSync()` simulate a run advancing per tick, purely so the UI has realistic data ahead of a real engine. Sync logs (`std::deque<SyncLogEntry>`) are operational/diagnostic rather than security evidence, so they don't get the same persistence guarantee as `events.db`/`alerts.db`.
+
+### Locking discipline bug caught before shipping
+
+Early draft of `SyncManager::log()` assumed callers already held `stateMutex_`. Several call sites held the lock via `std::lock_guard` across the call to `log()`, which also tried to lock the same non-recursive mutex — would have deadlocked the sync thread on its first hash check. Caught during self-review before building. Fixed by making `log()` self-locking and restructuring call sites to compute state-change booleans under the lock, release it, then log afterward.
+
+### Files added/modified in Phase 3
+
+**New (backend):** `SyncTypes.h`, `SyncManager.h/cpp`, `SyncController.h/cpp`.
+**Modified (backend):** `main.cpp` (init/shutdown wiring), `config.json` (new `sync` block).
+**Modified (webui):** `index.html` (`#sync-btn`, `#sync-logs-panel`), `style.css` (state animations, panel styles), `app.js` (polling, click routing, logs panel).
+**New (standalone):** `sync-portal/index.html`, `style.css`, `app.js`.
+
+### Known gaps at end of Phase 3
+
+- No real sync engine — everything is scaffolding around mocked progress.
+- `SyncController.cpp`/`SyncManager.cpp` needed manual addition to `CMakeLists.txt` (not editable directly during this phase).
+- **Nothing was actually listening on the rotating port** — clicking the sync icon during idle/syncing/paused opened a link to nowhere. This became the subject of Phase 3.1 below.
+
+---
+
+## Phase 3.1 — Debugging session: sync button connectivity, tooltip formatting, icon animation rework
+
+### Bug 1 — "the sync button does nothing"
+
+Root-caused through a long chain of false leads before landing on the real issue, worth recording for future debugging hygiene:
+
+1. First hypothesis: stale webui deploy (user had local edits, pasted assistant-generated files over them — files were in fact correctly merged, ruled out).
+2. Second hypothesis: `setup.sh` not deploying webui correctly — ruled out, `cp -r webui/* "$INSTALL_DIR/webui/"` was present and correct, and grep confirmed the sync code was actually present in deployed files.
+3. Third hypothesis: JS error silently swallowing the click — code reading showed `api()`'s `resp.json()` would throw on a non-JSON 404 body, and `.catch(() => null)` at the call site would swallow that silently, producing exactly "does nothing" with no console error. This was *a* real bug class but not *the* bug, since later testing showed valid JSON responses.
+4. Direct `curl` against `/api/sync/status` returned a raw Drogon 404 page — not a `JwtFilter`-issued 401 (confirmed by reading `JwtFilter.cpp`, which only ever returns 401, never 404 on auth failure). This proved the route wasn't registered with Drogon's router at all, not an auth problem.
+5. Checked `CMakeLists.txt` — `SyncController.cpp`/`SyncManager.cpp` were present in `add_executable()`'s direct source list (not behind an intermediate static lib that could get dead-stripped), ruling out the link-time-discard theory.
+6. Checked `main.cpp` — `#include "controllers/SyncController.h"` present, `SyncManager::instance().init()` called correctly.
+7. User restarted `nas-backend` fresh and re-tested: `/api/sync/status` now returned live data (`"Idle — hash verified 33s ago"` rendered correctly in the icon tooltip), confirming the earlier 404s were from a stale running binary predating the most recent rebuild — not a code defect at all. The investigation chain above was thorough but the actual fix was "restart the service after rebuilding," which had already nominally happened once but apparently not effectively until this point.
+8. With the API confirmed live, clicking the icon correctly opened `https://nas.local:<port>/` in a new tab — but nothing was listening there, producing "Unable to connect." This was expected and previously flagged: `SyncManager` only ever generated and reported a port number, nothing bound a listener to it.
+
+**Fix — stopgap portal listener:** rather than leave the portal permanently unreachable until a real sync engine exists, `SyncManager` now forks a detached `python3 -m http.server` process bound to whichever port it just rotated to, serving `sync-portal/`, and kills/respawns it on every rotation (`startPortalListener()`/`stopPortalListener()`). This is explicitly framed in code comments, the README, and here as a temporary hack to be deleted once a real sync engine owns its own port and listener — not a production sync mechanism.
+
+Three supporting changes were required to make the stopgap actually survive in the deployed environment, each found by working backward from what could plausibly break a forked child process inside a hardened systemd service:
+- `setup.sh` — added `python3` as a dependency (the stopgap execs it); opened the `49152-65535` dynamic port range in the firewall (the rotation range), since `firewall-cmd --add-service=https/http` only opens 443/80.
+- `nas-backend.service` — added `KillMode=process`. Without it, the unit's default `control-group` KillMode would SIGKILL the forked listener alongside the main backend PID on every `systemctl restart nas-backend`, leaving the portal dead until the next 24h rotation regardless of whether the code itself worked. Also added `ReadOnlyPaths` for `sync-portal/`, since `ProtectSystem=strict` only allowlisted `nas_storage`/`logs`/`tmp_uploads` as accessible — the forked listener needs to read `sync-portal/`'s static files.
+
+**Second connectivity bug, same symptom different cause:** after the listener was confirmed running (`ps aux | grep http.server` showed it, and the browser got `SSL_ERROR_RX_RECORD_TOO_LONG` rather than a connection refusal), the remaining issue was a protocol mismatch. The sync icon's click handler built the portal URL by reusing `location.protocol` from the main dashboard, which is `https:` (NGINX terminates TLS). The stopgap listener (`python3 -m http.server`) only ever speaks plain HTTP. Browser sent a TLS ClientHello at a plaintext server — `SSL_ERROR_RX_RECORD_TOO_LONG` is exactly what that looks like from the browser's side, not an "unreachable" or "refused" error. Fixed by hardcoding `http://` for the portal link specifically, with an inline comment explaining this is tied to the stopgap and should be revisited if/when a real sync engine terminates its own TLS.
+
+### Bug 2 — tooltip text wrapping oddly
+
+`#sync-btn.corner-fab::before` had `white-space: nowrap` immediately followed, two declarations later in the same block, by `white-space: normal` plus `max-width: 220px` and `text-align: center` — the later declaration always wins in CSS, so the `nowrap` was dead code and every tooltip was forced into a narrow, centered, word-wrapped column regardless of length. This was a copy-paste leftover from drafting (the centered-multi-line variant was tried and then abandoned in favor of matching `#logout-btn`'s existing single-line tooltip style, but the abandoned rules were never deleted). Fixed by removing the contradictory `max-width`/`white-space: normal`/`text-align: center` trio entirely, leaving a clean single-line `nowrap` tooltip consistent with every other FAB tooltip in the dashboard.
+
+### Feature request folded into this session — consistent state animations
+
+Originally the five sync icon states used an inconsistent mix of treatments (static dim for paused, slow fade for error, fast pulse-and-scale for hash-mismatch, plain colour+spin for syncing, plain colour for idle) — functional but visually unrelated to anything else in the dashboard. Per request, rewrote all five states to use the same fade-glow language already established by the Alerts tab's `glow-critical/-high/-medium/-low/-none` keyframes (fade between muted and a severity colour with a matching box-shadow glow, same 2.5s base cycle), so the sync icon and the Alerts nav tab read as the same kind of status indicator:
+
+- **idle** → fades to `--sev-low` (green), mirrors `glow-none`'s "all clear" treatment.
+- **syncing** → fades to `--accent` (blue, not a severity colour, since "actively syncing" isn't a problem state) *and* spins — fading alone doesn't convey "in progress" the way literal motion does, so the spin was kept as an additional cue layered on top of the fade.
+- **paused** → fades to `--sev-medium` (amber/yellow).
+- **error** → fades to `--sev-critical` (red) on the same 2.5s cycle as Alerts' `glow-critical`.
+- **hash-mismatch** → fades to `--sev-high` (orange) but on a faster 1.4s cycle with an added scale pulse, intentionally different rhythm from error (not just colour) so the two failure states are distinguishable at a glance without reading the tooltip — preserves the original design requirement that hash-mismatch be "fully distinct from error," just expressed through the new shared animation language instead of the original ad hoc treatment.
+
+### Files modified in Phase 3.1
+
+- `backend/services/SyncManager.h/cpp` — added `startPortalListener()`/`stopPortalListener()`, `portalListenerPid_`, `portalDir_`; `init()` signature gained a `portalDir` parameter; `maybeRotatePort()` now calls `startPortalListener()`; `shutdown()` calls `stopPortalListener()`.
+- `backend/main.cpp` — reads `sync.portal_dir` from config, passes to `SyncManager::init()`.
+- `backend/config.json` — added `sync.portal_dir`.
+- `setup.sh` — added `python3` dependency; opened `49152-65535/tcp` in the firewall; (sync-portal deploy step and directory creation were already added in Phase 3).
+- `systemd/nas-backend.service` — added `KillMode=process`; added `ReadOnlyPaths` for `sync-portal/`.
+- `webui/style.css` — fixed the dead `white-space`/`max-width`/`text-align` tooltip rules; replaced all five `.sync-*` state blocks with the new shared fade-glow keyframes (`sync-glow-idle/-syncing/-paused/-error/-hash-mismatch`), keeping `sync-spin` layered onto syncing only.
+- `webui/app.js` — sync portal link now hardcodes `http://` instead of reusing `location.protocol`.
+
+### Known gap carried forward
+
+The stopgap portal listener (`python3 -m http.server`, forked/respawned by `SyncManager`) is explicitly not production-grade: no TLS, no auth beyond port secrecy, no self-supervision beyond the next daily rotation if it dies mid-window. This is documented prominently in the README's "Storage sync" section with an explicit warning banner, and is meant to be deleted in its entirety once a real sync engine exists and owns its own port/listener.

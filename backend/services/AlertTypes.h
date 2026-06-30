@@ -41,6 +41,15 @@ namespace RuleId {
     constexpr const char *MD004 = "MD-004";  // >=500 deletes/10min same actor — CRITICAL
     constexpr const char *MD005 = "MD-005";  // login then >=50 deletes/5min  — HIGH
     constexpr const char *MD006 = "MD-006";  // any dir.delete                — MEDIUM
+
+    // Path traversal
+    constexpr const char *PT001 = "PT-001";  // >=5  traversal failures/60s  same IP — MEDIUM
+    constexpr const char *PT002 = "PT-002";  // >=20 traversal failures/5min same IP — HIGH
+
+    // Data exfiltration
+    constexpr const char *DX001 = "DX-001";  // >=50  downloads/5min  same actor — MEDIUM
+    constexpr const char *DX002 = "DX-002";  // >=200 downloads/10min same actor — HIGH
+    constexpr const char *DX003 = "DX-003";  // login then >=30 downloads/5min   — HIGH
 }
 
 // ── alert record ─────────────────────────────────────────────────────────────

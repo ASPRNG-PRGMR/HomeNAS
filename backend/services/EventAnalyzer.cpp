@@ -4,6 +4,7 @@
 #include <sqlite3.h>
 #include <drogon/drogon.h>
 #include <unordered_map>
+#include <unordered_set>
 #include <chrono>
 #include <sstream>
 
@@ -23,6 +24,24 @@ void EventAnalyzer::init(const std::string &eventsDbPath) {
         if (db_) sqlite3_close(db_);
         db_ = nullptr;
     }
+
+    // Load trusted IPs from config — these are never subjected to IP-keyed
+    // rules (BF, PT). Localhost and Tailscale IPs should always be here.
+    // Example config:
+    //   "trusted_ips": ["127.0.0.1", "::1", "100.64.0.1"]
+    auto &cfg = drogon::app().getCustomConfig();
+    const auto &trustedArr = cfg["trusted_ips"];
+    if (trustedArr.isArray()) {
+        for (const auto &v : trustedArr) {
+            if (v.isString()) {
+                trustedIps_.insert(v.asString());
+                LOG_INFO << "EventAnalyzer: trusting IP " << v.asString();
+            }
+        }
+    }
+    // Localhost is always trusted regardless of config, as a safety net.
+    trustedIps_.insert("127.0.0.1");
+    trustedIps_.insert("::1");
 }
 
 void EventAnalyzer::shutdown() {
@@ -38,22 +57,26 @@ void EventAnalyzer::analyze(
     for (auto &[ev, ts] : batch) {
 
         // BF-001..004: check after every auth failure (IP-keyed)
-        if (ev.type == EventType::AuthLoginFailure && !ev.sourceIp.empty()) {
+        if (ev.type == EventType::AuthLoginFailure &&
+            !ev.sourceIp.empty() && !isTrusted(ev.sourceIp)) {
             checkBF001_004(ev.sourceIp);
         }
 
         // BF-005: check after every auth SUCCESS (success-after-failures)
-        if (ev.type == EventType::AuthLoginSuccess && !ev.sourceIp.empty()) {
+        if (ev.type == EventType::AuthLoginSuccess &&
+            !ev.sourceIp.empty() && !isTrusted(ev.sourceIp)) {
             checkBF005(ev.sourceIp, ts);
         }
 
         // BF-006: check password spraying after every auth failure
         // (needs claimed_user; if NULL/empty, skip — old rows pre-migration)
-        if (ev.type == EventType::AuthLoginFailure) {
+        if (ev.type == EventType::AuthLoginFailure &&
+            !isTrusted(ev.sourceIp)) {
             checkBF006();
         }
 
         // MD-001..004: check after every file/dir delete (actor-keyed)
+        // Not IP-gated — we still want to detect mass deletes from trusted IPs.
         if ((ev.type == EventType::FileDelete ||
              ev.type == EventType::DirDelete) &&
              ev.actorUser.has_value()) {
@@ -71,11 +94,38 @@ void EventAnalyzer::analyze(
             checkMD006(*ev.actorUser, ev.sourceIp,
                         ev.targetPath.value_or(""));
         }
+
+        // PT-001/002: path traversal probe (IP-keyed)
+        if (ev.result == EventResult::Failure &&
+            ev.failureReason.has_value() &&
+            ev.failureReason == "path_traversal_or_forbidden" &&
+            !ev.sourceIp.empty() && !isTrusted(ev.sourceIp)) {
+            checkPT001_002(ev.sourceIp);
+        }
+
+        // DX-001/002: bulk download detection (actor-keyed)
+        if (ev.type == EventType::FileDownload &&
+            ev.result == EventResult::Success &&
+            ev.actorUser.has_value()) {
+            checkDX001_002(*ev.actorUser);
+        }
+
+        // DX-003: login then download burst (actor-keyed)
+        if (ev.type == EventType::AuthLoginSuccess &&
+            ev.actorUser.has_value()) {
+            checkDX003(*ev.actorUser, ts);
+        }
     }
 
     // BF-006 is checked once per batch (not per-event) since it aggregates
     // across all IPs — doing it per-failure would run the same query N times
     // per batch with identical results.
+}
+
+// ── trusted IP helper ─────────────────────────────────────────────────────────
+
+bool EventAnalyzer::isTrusted(const std::string &ip) const {
+    return trustedIps_.count(ip) > 0;
 }
 
 // ── BF-001 .. BF-004 ─────────────────────────────────────────────────────────
@@ -380,4 +430,167 @@ void EventAnalyzer::markFired(const char *ruleId, const std::string &key) {
     auto now = std::chrono::system_clock::now();
     lastFired_[mapKey] = std::chrono::duration_cast<std::chrono::seconds>(
                              now.time_since_epoch()).count();
+}
+
+// PT-001 / PT-002: path traversal probe
+//
+// FilesystemController emits FileDownload/FileDelete failures with
+// failure_reason = 'path_traversal_or_forbidden' on every rejected path.
+// One or two such events is a misconfigured client or typo. A burst
+// from the same IP is systematic directory probing.
+//
+// PT-001 (MEDIUM): >=5  traversal failures from same IP in 60s
+// PT-002 (HIGH):   >=20 traversal failures from same IP in 5min
+
+void EventAnalyzer::checkPT001_002(const std::string &ip) {
+    struct Rule {
+        const char   *id;
+        AlertSeverity sev;
+        int64_t       threshold;
+        int           windowSecs;
+        const char   *title;
+        int           cooldownSecs;
+    };
+    static const Rule kRules[] = {
+        { RuleId::PT001, AlertSeverity::Medium, 5,  60,  "Path Traversal Probe Detected",   180 },
+        { RuleId::PT002, AlertSeverity::High,  20, 300,  "Sustained Path Traversal Attack", 300 },
+    };
+
+    for (auto &r : kRules) {
+        int64_t count = countTraversalFailures(ip, r.windowSecs);
+        if (count >= r.threshold && shouldFire(r.id, ip, r.cooldownSecs)) {
+            std::ostringstream ev;
+            ev << "{\"source_ip\":\"" << ip << "\""
+               << ",\"traversal_failures\":" << count
+               << ",\"window_seconds\":" << r.windowSecs
+               << ",\"failure_reason\":\"path_traversal_or_forbidden\"}";
+
+            AlertWriter::instance().writeAlert(
+                NasAlert(r.id, r.sev, r.title, ev.str())
+                    .withSourceIp(ip));
+            markFired(r.id, ip);
+            break; // highest applicable rule only
+        }
+    }
+}
+
+// DX-001 / DX-002: bulk download detection
+//
+// Actor-keyed so an attacker with a valid token can't evade by rotating
+// IPs. DX-001 (MEDIUM) is informational — could be a legitimate bulk
+// export. DX-002 (HIGH) requires genuine volume.
+//
+// DX-001 (MEDIUM): >=50  downloads by same actor in 5min
+// DX-002 (HIGH):   >=200 downloads by same actor in 10min
+
+void EventAnalyzer::checkDX001_002(const std::string &actor) {
+    struct Rule {
+        const char   *id;
+        AlertSeverity sev;
+        int64_t       threshold;
+        int           windowSecs;
+        const char   *title;
+        int           cooldownSecs;
+    };
+    static const Rule kRules[] = {
+        { RuleId::DX001, AlertSeverity::Medium, 50,  300, "Unusual Download Volume",                     300 },
+        { RuleId::DX002, AlertSeverity::High,  200,  600, "Possible Data Exfiltration -- Bulk Download", 600 },
+    };
+
+    for (auto &r : kRules) {
+        int64_t count = countEvents("file.download", nullptr,
+                                     actor.c_str(), r.windowSecs);
+        if (count >= r.threshold && shouldFire(r.id, actor, r.cooldownSecs)) {
+            std::ostringstream ev;
+            ev << "{\"actor\":\"" << actor << "\""
+               << ",\"downloads\":" << count
+               << ",\"window_seconds\":" << r.windowSecs << "}";
+
+            AlertWriter::instance().writeAlert(
+                NasAlert(r.id, r.sev, r.title, ev.str())
+                    .withActor(actor));
+            markFired(r.id, actor);
+            break;
+        }
+    }
+}
+
+// DX-003: login -> download burst
+//
+// Mirrors MD-005 (login -> delete burst) but for reads. A fresh login
+// immediately followed by bulk downloads is the pattern of a stolen
+// credential being used to exfiltrate data before the account is
+// noticed and rotated.
+//
+// DX-003 (HIGH): login followed by >=30 downloads within 5min
+
+void EventAnalyzer::checkDX003(const std::string &actor,
+                                 const std::string &loginTs) {
+    int64_t downloads = countDownloadsAfterLogin(actor, loginTs, 300);
+    if (downloads >= 30 && shouldFire(RuleId::DX003, actor, 300)) {
+        std::ostringstream ev;
+        ev << "{\"actor\":\"" << actor << "\""
+           << ",\"downloads_after_login\":" << downloads
+           << ",\"login_timestamp\":\"" << loginTs << "\""
+           << ",\"window_seconds\":300}";
+
+        AlertWriter::instance().writeAlert(
+            NasAlert(RuleId::DX003, AlertSeverity::High,
+                      "Possible Credential Compromise -- Login Followed by Bulk Download",
+                      ev.str())
+                .withActor(actor));
+        markFired(RuleId::DX003, actor);
+    }
+}
+
+// ── new query helpers ─────────────────────────────────────────────────────────
+
+int64_t EventAnalyzer::countTraversalFailures(const std::string &ip,
+                                               int windowSeconds) {
+    if (!db_) return 0;
+    const char *sql =
+        "SELECT COUNT(*) FROM nas_events "
+        "WHERE result = 'failure' "
+        "  AND source_ip = ? "
+        "  AND failure_reason = 'path_traversal_or_forbidden' "
+        "  AND timestamp_utc >= datetime('now', '-' || ? || ' seconds')";
+
+    sqlite3_stmt *stmt = nullptr;
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK)
+        return 0;
+    sqlite3_bind_text(stmt, 1, ip.c_str(),   -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(stmt,  2, windowSeconds);
+
+    int64_t result = 0;
+    if (sqlite3_step(stmt) == SQLITE_ROW)
+        result = sqlite3_column_int64(stmt, 0);
+    sqlite3_finalize(stmt);
+    return result;
+}
+
+int64_t EventAnalyzer::countDownloadsAfterLogin(const std::string &actor,
+                                                  const std::string &loginTs,
+                                                  int windowSeconds) {
+    if (!db_) return 0;
+    const char *sql =
+        "SELECT COUNT(*) FROM nas_events "
+        "WHERE event_type = 'file.download' "
+        "  AND result = 'success' "
+        "  AND actor_user = ? "
+        "  AND timestamp_utc > ? "
+        "  AND timestamp_utc <= datetime(?, '+' || ? || ' seconds')";
+
+    sqlite3_stmt *stmt = nullptr;
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK)
+        return 0;
+    sqlite3_bind_text(stmt, 1, actor.c_str(),   -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, loginTs.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, loginTs.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(stmt,  4, windowSeconds);
+
+    int64_t result = 0;
+    if (sqlite3_step(stmt) == SQLITE_ROW)
+        result = sqlite3_column_int64(stmt, 0);
+    sqlite3_finalize(stmt);
+    return result;
 }

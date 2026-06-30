@@ -1,0 +1,223 @@
+/* HomeNAS Sync Portal — standalone landing page, separate from the main
+   webui. No shared classes with style.css on purpose: this page is served
+   by a different process on a different (daily-rotating) port and should
+   not assume the main dashboard's stylesheet is present or in sync. */
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:            #070809;
+  --surface:       #0d0f13;
+  --surface2:      #12151b;
+  --border:        #1c1f28;
+  --text:          #d0d2de;
+  --muted:         #4a4e62;
+  --accent:        #4f7fff;
+  --mono:          'JetBrains Mono', 'Fira Mono', monospace;
+
+  --ok:            #4caf7d;
+  --warn:          #e07d2a;
+  --err:           #e05252;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 14px;
+  min-height: 100vh;
+}
+
+#portal-shell {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 32px 20px 80px;
+}
+
+#portal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 28px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+#portal-wordmark {
+  font-family: var(--mono);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 4px;
+  color: var(--accent);
+  text-transform: uppercase;
+}
+#portal-wordmark-sub {
+  color: var(--muted);
+  font-weight: 500;
+  letter-spacing: 2px;
+}
+
+#portal-conn-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.conn-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+  display: inline-block;
+  transition: background .2s;
+}
+.conn-dot.connected    { background: var(--ok);  animation: conn-pulse 2s ease-in-out infinite; }
+.conn-dot.disconnected { background: var(--err); }
+@keyframes conn-pulse { 0%,100% { opacity: 1; } 50% { opacity: .4; } }
+
+#portal-main {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.portal-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 18px 20px;
+}
+
+.portal-card-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.portal-card-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+@media (max-width: 600px) {
+  .portal-card-grid { grid-template-columns: 1fr; }
+}
+
+.portal-stat {
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--text);
+}
+.portal-stat-mono { font-family: var(--mono); font-size: 14px; word-break: break-all; }
+.portal-stat-sub { font-size: 11px; color: var(--muted); margin-top: 4px; }
+
+.status-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.status-badge {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  padding: 3px 10px;
+  border-radius: 999px;
+}
+.status-badge.idle           { background: rgba(76,175,125,.12); color: var(--ok); }
+.status-badge.syncing        { background: rgba(79,127,255,.15); color: var(--accent); }
+.status-badge.paused         { background: rgba(224,125,42,.12); color: var(--warn); }
+.status-badge.error          { background: rgba(224,82,82,.12);  color: var(--err); }
+.status-badge.hash_mismatch  { background: rgba(224,125,42,.15); color: var(--warn); }
+
+#progress-wrap { margin-top: 14px; }
+#progress-track {
+  height: 6px;
+  background: var(--surface2);
+  border-radius: 3px;
+  overflow: hidden;
+}
+#progress-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+  transition: width .4s ease;
+  width: 0%;
+}
+#progress-label {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--muted);
+  font-family: var(--mono);
+}
+
+.issues-toggle-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 10px;
+  padding: 2px 8px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.issues-toggle-btn:hover { color: var(--text); border-color: var(--muted); }
+
+#card-issues { border-color: rgba(224,82,82,.3); }
+.sync-issue-row {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+.sync-issue-row:last-child { border-bottom: none; }
+.sync-issue-time { font-family: var(--mono); font-size: 10px; color: var(--muted); }
+.sync-issue-level {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 4px;
+  margin-left: 6px;
+}
+.sync-issue-level.error   { background: rgba(224,82,82,.12); color: var(--err); }
+.sync-issue-level.warning { background: rgba(224,125,42,.12); color: var(--warn); }
+.sync-issue-level.info    { background: rgba(255,255,255,.05); color: var(--muted); }
+.sync-issue-message { color: var(--text); margin-top: 3px; line-height: 1.4; }
+
+#portal-files {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.portal-file-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.portal-file-row:last-child { border-bottom: none; }
+.portal-file-icon { width: 18px; text-align: center; }
+.portal-file-name { flex: 1; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.portal-file-meta { color: var(--muted); font-size: 11px; font-family: var(--mono); }
+
+.portal-loading, .portal-empty {
+  color: var(--muted);
+  font-size: 13px;
+  padding: 24px 0;
+  text-align: center;
+}
+
+.hidden { display: none !important; }

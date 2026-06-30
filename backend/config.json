@@ -21,6 +21,10 @@
     "jwt_secret": "please_put_something_that_is_actually_hard_to_guess",
     "jwt_expiry_seconds": 86400,
     "admin_username": "admin",
-    "admin_password": "admin@change_this"
+    "admin_password": "admin@change_this",
+    "trusted_ips": [
+      "127.0.0.1",
+      "::1"
+    ]
   }
 }

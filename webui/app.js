@@ -112,7 +112,7 @@ function switchTab(tab) {
   // Lazy-load each view on first switch
   if (tab === 'overview') loadOverview();
   if (tab === 'alerts')   { alertsPage = 0; loadAlerts(); }
-  if (tab === 'events')   { eventsPage = 0; loadEvents(); }
+  if (tab === 'logs')     { eventsPage = 0; loadEvents(); }
 }
 
 // ── file manager navigation ───────────────────────────────────────────────────
@@ -331,15 +331,11 @@ function downloadFile(path, name) {
 }
 
 // ── upload ────────────────────────────────────────────────────────────────────
-// Upload-btn triggers normal file picker (files only via click)
 document.getElementById('upload-btn').addEventListener('click', () => {
   document.getElementById('file-input').click();
 });
 document.getElementById('file-input').addEventListener('change', e => {
   uploadFiles(e.target.files); e.target.value = '';
-});
-document.getElementById('folder-input').addEventListener('change', e => {
-  uploadFlatList(Array.from(e.target.files)); e.target.value = '';
 });
 
 const appShell    = document.getElementById('auth-shell');
@@ -356,99 +352,12 @@ appShell.addEventListener('dragleave', () => {
   if (dragCounter === 0) dropOverlay.classList.add('hidden');
 });
 appShell.addEventListener('dragover', e => e.preventDefault());
-appShell.addEventListener('drop', async e => {
+appShell.addEventListener('drop', e => {
   if (activeTab !== 'files') return;
   e.preventDefault(); dragCounter = 0;
   dropOverlay.classList.add('hidden');
-
-  // Use DataTransferItemList to support folder drops
-  const items = e.dataTransfer.items;
-  if (items && items.length && items[0].webkitGetAsEntry) {
-    const entries = Array.from(items).map(i => i.webkitGetAsEntry()).filter(Boolean);
-    const files = await readEntries(entries, '');
-    await uploadFlatList(files);
-  } else {
-    uploadFiles(e.dataTransfer.files);
-  }
+  uploadFiles(e.dataTransfer.files);
 });
-
-// Recursively read a list of FileSystemEntry objects into a flat array
-// Each item is { file: File, relativePath: string } where relativePath
-// mirrors webkitRelativePath so uploadFlatList can recreate the tree.
-async function readEntries(entries, basePath) {
-  const result = [];
-  for (const entry of entries) {
-    if (entry.isFile) {
-      const file = await new Promise((res, rej) => entry.file(res, rej));
-      // Attach a synthetic relativePath so uploadFlatList works the same way
-      Object.defineProperty(file, 'webkitRelativePath', {
-        value: basePath ? basePath + '/' + entry.name : entry.name,
-        writable: false
-      });
-      result.push(file);
-    } else if (entry.isDirectory) {
-      const reader = entry.createReader();
-      // readEntries may return results in batches — keep reading until empty
-      let batch;
-      const children = [];
-      do {
-        batch = await new Promise((res, rej) => reader.readEntries(res, rej));
-        children.push(...batch);
-      } while (batch.length > 0);
-      const sub = await readEntries(children, basePath ? basePath + '/' + entry.name : entry.name);
-      result.push(...sub);
-    }
-  }
-  return result;
-}
-
-// Upload a flat list of File objects that already have webkitRelativePath set
-async function uploadFlatList(files) {
-  if (!files.length) return;
-  const bar   = document.getElementById('upload-bar');
-  const prog  = document.getElementById('upload-progress');
-  const label = document.getElementById('upload-label');
-  bar.classList.remove('hidden');
-
-  // Create all needed subdirectories first
-  const dirs = new Set();
-  for (const f of files) {
-    const parts = f.webkitRelativePath.split('/');
-    for (let i = 1; i < parts.length; i++) {
-      dirs.add(currentPath.replace(/\/$/, '') + '/' + parts.slice(0, i).join('/'));
-    }
-  }
-  const sortedDirs = Array.from(dirs).sort((a, b) => a.split('/').length - b.split('/').length);
-  label.textContent = 'Creating folders...';
-  prog.style.setProperty('--pct', '10%');
-  for (const dir of sortedDirs) {
-    await post('/api/mkdir', { path: dir }).catch(() => {});
-  }
-
-  // Upload each file to its subdirectory
-  const total = files.length;
-  let done = 0;
-  for (const f of files) {
-    const parts   = f.webkitRelativePath.split('/');
-    const fileDir = parts.length > 1
-      ? currentPath.replace(/\/$/, '') + '/' + parts.slice(0, -1).join('/')
-      : currentPath;
-    const fd = new FormData();
-    fd.append('files', f);
-    label.textContent = `Uploading ${done + 1} / ${total}: ${f.name}`;
-    prog.style.setProperty('--pct', Math.round(10 + (done / total) * 88) + '%');
-    await api('POST', `/api/upload?path=${encodeURIComponent(fileDir)}`, fd, true);
-    done++;
-  }
-
-  prog.style.setProperty('--pct', '100%');
-  label.textContent = 'Done';
-  setTimeout(() => {
-    bar.classList.add('hidden');
-    prog.style.setProperty('--pct', '0%');
-    navigate(currentPath);
-  }, 800);
-}
 
 async function uploadFiles(files) {
   if (!files.length) return;
@@ -456,54 +365,12 @@ async function uploadFiles(files) {
   const prog  = document.getElementById('upload-progress');
   const label = document.getElementById('upload-label');
   bar.classList.remove('hidden');
-
-  const hasFolderStructure = Array.from(files).some(f => f.webkitRelativePath && f.webkitRelativePath.includes('/'));
-
-  if (!hasFolderStructure) {
-    // Flat file upload — original behaviour
-    const fd = new FormData();
-    for (const f of files) fd.append('files', f);
-    label.textContent = `Uploading ${files.length} file(s)...`;
-    prog.style.setProperty('--pct', '30%');
-    await api('POST', `/api/upload?path=${encodeURIComponent(currentPath)}`, fd, true);
-    prog.style.setProperty('--pct', '100%');
-  } else {
-    // Folder upload — create subdirs, then upload each file to its path
-    const total = files.length;
-    let done = 0;
-
-    // Collect unique intermediate directory paths, sorted shallowest first
-    const dirs = new Set();
-    for (const f of files) {
-      const parts = f.webkitRelativePath.split('/');
-      for (let i = 1; i < parts.length; i++) {
-        dirs.add(currentPath.replace(/\/$/, '') + '/' + parts.slice(0, i).join('/'));
-      }
-    }
-    const sortedDirs = Array.from(dirs).sort((a, b) => a.split('/').length - b.split('/').length);
-
-    label.textContent = 'Creating folders...';
-    prog.style.setProperty('--pct', '10%');
-    for (const dir of sortedDirs) {
-      await post('/api/mkdir', { path: dir }).catch(() => {});
-    }
-
-    // Upload each file one by one to its target subdirectory
-    for (const f of files) {
-      const parts   = f.webkitRelativePath.split('/');
-      const fileDir = parts.length > 1
-        ? currentPath.replace(/\/$/, '') + '/' + parts.slice(0, -1).join('/')
-        : currentPath;
-      const fd = new FormData();
-      fd.append('files', f);
-      label.textContent = `Uploading ${done + 1} / ${total}: ${f.name}`;
-      prog.style.setProperty('--pct', Math.round(10 + (done / total) * 88) + '%');
-      await api('POST', `/api/upload?path=${encodeURIComponent(fileDir)}`, fd, true);
-      done++;
-    }
-    prog.style.setProperty('--pct', '100%');
-  }
-
+  const fd = new FormData();
+  for (const f of files) fd.append('files', f);
+  label.textContent = `Uploading ${files.length} file(s)…`;
+  prog.style.setProperty('--pct', '30%');
+  await api('POST', `/api/upload?path=${encodeURIComponent(currentPath)}`, fd, true);
+  prog.style.setProperty('--pct', '100%');
   label.textContent = 'Done';
   setTimeout(() => {
     bar.classList.add('hidden');
@@ -1250,8 +1117,115 @@ function renderPagination(containerId, page, itemCount, pageSize, onPage) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  SHARED UTILS (referenced by both NAS and dashboard)
+//  SYNC STATUS — bottom-left FAB
 // ═══════════════════════════════════════════════════════════════════════════
+
+let syncPollTimer = null;
+const SYNC_POLL_INTERVAL = 5000; // tighter than the 15s dashboard poll —
+                                   // sync state (esp. % complete) is more
+                                   // time-sensitive while actively syncing
+let lastSyncState = null;
+
+function startSyncPolling() {
+  stopSyncPolling();
+  syncPollTimer = setInterval(updateSyncIcon, SYNC_POLL_INTERVAL);
+  updateSyncIcon();
+}
+function stopSyncPolling() {
+  if (syncPollTimer) { clearInterval(syncPollTimer); syncPollTimer = null; }
+}
+
+async function updateSyncIcon() {
+  const data = await get('/api/sync/status').catch(() => null);
+  if (!data) return;
+
+  const btn = document.getElementById('sync-btn');
+  btn.classList.remove('sync-idle','sync-syncing','sync-paused','sync-error','sync-hash-mismatch');
+  btn.classList.add('sync-' + data.state.replace('_', '-'));
+  lastSyncState = data.state;
+
+  if (data.state === 'syncing') {
+    const etaMin = Math.ceil(data.eta_seconds / 60);
+    btn.setAttribute('data-tip',
+      `Syncing — ${data.percent_complete}% — ~${etaMin}m remaining`);
+  } else if (data.state === 'paused') {
+    btn.setAttribute('data-tip', `Sync paused — ${data.percent_complete}% complete`);
+  } else if (data.state === 'error') {
+    btn.setAttribute('data-tip', 'Problem during sync — click to see logs');
+  } else if (data.state === 'hash_mismatch') {
+    btn.setAttribute('data-tip', 'Storage hash mismatch — click to see logs');
+  } else {
+    const checked = data.last_hash_check_utc ? relTime(data.last_hash_check_utc) : '—';
+    btn.setAttribute('data-tip', `Idle — hash verified ${checked}`);
+  }
+}
+
+document.getElementById('sync-btn').addEventListener('click', async () => {
+  if (lastSyncState === 'error' || lastSyncState === 'hash_mismatch') {
+    openSyncLogsPanel();
+    return;
+  }
+  // Normal operation (idle/syncing/paused) — open the standalone sync
+  // landing page, served on the daily-rotating port. The port is read
+  // fresh on every click rather than cached, since it can rotate at any
+  // time and a stale port would silently 404.
+  //
+  // Forced http:// rather than reusing location.protocol: the main
+  // dashboard is served over https (NGINX terminates TLS), but the
+  // stopgap portal listener (python3 -m http.server — see SyncManager)
+  // speaks plain HTTP with no TLS at all. Reusing https here sends a TLS
+  // ClientHello at a plaintext server, which the browser reports as
+  // SSL_ERROR_RX_RECORD_TOO_LONG rather than a clear "wrong protocol"
+  // message. This is specific to the stopgap; once a real sync engine
+  // exists and (if) it terminates TLS itself, this should switch back to
+  // matching the main page's protocol or to whatever scheme the real
+  // service requires.
+  const data = await get('/api/sync/status').catch(() => null);
+  if (!data || !data.current_port) return;
+  const url = `http://${location.hostname}:${data.current_port}/`;
+  window.open(url, '_blank');
+});
+
+async function openSyncLogsPanel() {
+  const panel = document.getElementById('sync-logs-panel');
+  const body  = document.getElementById('sync-logs-body');
+  body.innerHTML = `<div class="dash-loading">Loading…</div>`;
+  panel.classList.remove('hidden');
+
+  const data = await get('/api/sync/logs?limit=100').catch(() => null);
+  const entries = data?.items || [];
+
+  if (!entries.length) {
+    body.innerHTML = `<div class="dash-empty">No log entries</div>`;
+    return;
+  }
+
+  // Most recent first for a logs panel — opposite of the timeline view,
+  // where chronological-ascending makes sense for following an incident.
+  body.innerHTML = entries.slice().reverse().map(e => `
+    <div class="sync-log-row">
+      <span class="sync-log-time">${fmtUtc(e.timestamp_utc)}</span>
+      <span class="sync-log-level ${e.level}">${e.level}</span>
+      <div class="sync-log-message">${escHtml(e.message)}</div>
+    </div>`).join('');
+}
+
+document.getElementById('sync-logs-close').addEventListener('click', () => {
+  document.getElementById('sync-logs-panel').classList.add('hidden');
+});
+
+// Start sync polling alongside alert polling once the app shell is shown.
+const _origShowApp = showApp;
+showApp = function() {
+  _origShowApp();
+  startSyncPolling();
+};
+const _origSignOut = signOut;
+signOut = function() {
+  stopSyncPolling();
+  document.getElementById('sync-logs-panel').classList.add('hidden');
+  _origSignOut();
+};
 
 function formatBytes(n) {
   if (n === undefined || n === null) return '—';

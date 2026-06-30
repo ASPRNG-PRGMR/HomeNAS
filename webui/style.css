@@ -1,445 +1,1333 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <title>HomeNAS</title>
-  <link rel="stylesheet" href="style.css">
-</head>
-<body>
+/* --- */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-  <!--  Login screen  -->
-  <div id="login-screen">
-    <div class="login-box">
-      <div class="login-logo">NAS</div>
-      <input id="login-user" type="text"     placeholder="Username" autocomplete="username">
-      <input id="login-pass" type="password" placeholder="Password" autocomplete="current-password">
-      <button id="login-btn">Sign in</button>
-      <p id="login-error" class="error hidden"></p>
-    </div>
-  </div>
+:root {
+  --bg:            #070809;
+  --surface:       #0d0f13;
+  --surface2:      #12151b;
+  --border:        #1c1f28;
+  --text:          #d0d2de;
+  --muted:         #4a4e62;
+  --accent:        #4f7fff;
+  --accent-h:      #3d6bef;
+  --danger:        #e05252;
+  --rename:        #d4903a;
+  --radius:        8px;
+  --mono:          'JetBrains Mono', 'Fira Mono', monospace;
+  --nav-h:         80px;
 
-  <!--  Authenticated shell  -->
-  <div id="auth-shell" class="hidden">
+  --sev-critical:    #e05252;
+  --sev-high:        #e07d2a;
+  --sev-medium:      #c9bb3a;
+  --sev-low:         #4caf7d;
+  --sev-critical-bg: rgba(224,82,82,.12);
+  --sev-high-bg:     rgba(224,125,42,.12);
+  --sev-medium-bg:   rgba(201,187,58,.10);
+  --sev-low-bg:      rgba(76,175,125,.10);
+}
 
-    <!-- Top nav bar -->
-    <nav id="top-nav">
-      <div id="nav-inner">
-        <!-- Left pill: Files + Overview -->
-        <div id="nav-tabs-left" class="nav-pill">
-          <button class="nav-tab active" data-tab="files">&#128193; Files</button>
-          <button class="nav-tab"        data-tab="overview">&#9711; Overview</button>
-        </div>
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 14px;
+  min-height: 100vh;
+}
 
-        <!-- Centre: wordmark only -->
-        <div id="nav-centre">
-          <div id="nav-wordmark">HOME NAS</div>
-        </div>
+.hidden { display: none !important; }
 
-        <!-- Right pill: Alerts + Events -->
-        <div id="nav-tabs-right" class="nav-pill">
-          <button class="nav-tab" data-tab="alerts">
-            &#9888; Alerts
-            <span id="nav-alert-count" class="nav-alert-badge hidden">0</span>
-          </button>
-          <button class="nav-tab" data-tab="events">&#8801; Events</button>
-        </div>
-      </div>
-    </nav>
+/* 
+   LOGIN
+ */
+#login-screen {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+}
+.login-box {
+  width: 320px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 40px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.login-logo {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: 5px;
+  color: var(--accent);
+  text-align: center;
+  margin-bottom: 8px;
+  font-family: var(--mono);
+}
+.login-box input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  padding: 10px 14px;
+  font-size: 14px;
+  outline: none;
+  transition: border-color .15s;
+}
+.login-box input:focus { border-color: var(--accent); }
+.login-box button {
+  background: var(--accent);
+  border: none;
+  border-radius: var(--radius);
+  color: #fff;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  padding: 10px;
+  margin-top: 4px;
+  transition: background .15s;
+}
+.login-box button:hover { background: var(--accent-h); }
+.error { color: var(--danger); font-size: 13px; text-align: center; }
 
-    <!-- Bottom-left: sign out FAB -->
-    <button id="logout-btn" class="corner-fab" data-tip="Sign out" title="Sign out">&#9099;</button>
+/* 
+   AUTHENTICATED SHELL
+ */
+#auth-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
 
-    <!-- Bottom-right: FAB cluster (files tab only) -->
-    <div id="fab-cluster" class="hidden">
-      <div id="upload-menu" class="hidden">
-        <button id="upload-menu-folder">&#128193; Folder</button>
-        <button id="upload-menu-files">&#128196; Files</button>
-      </div>
-      <button id="fab-folder" class="fab" data-tip="New folder">&#128193;</button>
-      <button id="fab-upload" class="fab" data-tip="Upload">&#8593;</button>
-    </div>
+/* --- */
+#top-nav {
+  height: var(--nav-h);
+  background: transparent;
+  border-bottom: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 14px;
+  position: fixed;
+  top: 8px;
+  left: 0;
+  right: 0;
+  z-index: 30;
+  pointer-events: none;
+  /* inner wrapper centres everything in a max-width container */
+}
+#top-nav > * { pointer-events: auto; }
 
-    <!--  Files tab  -->
-    <div id="tab-files" class="tab-pane">
-      <!-- kept invisible; app.js listeners attach here -->
-      <header>
-        <nav id="breadcrumb"></nav>
-        <div class="header-actions">
-          <button id="new-folder-btn">+ Folder</button>
-          <button id="upload-btn"> Upload</button>
-        </div>
-      </header>
+/* Centred nav inner wrapper */
+#nav-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  max-width: 1100px;
+  position: relative;
+  pointer-events: none;
+}
+#nav-inner > * { pointer-events: auto; }
 
-      <!-- Path bar: sticky subheader shown when inside a subdirectory -->
-      <div id="path-bar" class="hidden">
-        <button id="path-home" title="Home">&#8962;</button>
-        <button id="path-back" title="Back">&#8592;</button>
-        <div id="path-pill"></div>
-      </div>
+/* Left pill: Files, Overview, Alerts */
+#nav-tabs-left {
+  flex-shrink: 0;
+}
 
-      <div id="drop-overlay" class="hidden">Drop files to upload</div>
-      <main id="file-list"></main>
+/* Right pill: Rules, Logs */
+#nav-tabs-right {
+  flex-shrink: 0;
+}
 
-      <div id="upload-bar" class="hidden">
-        <div id="upload-progress"></div>
-        <span id="upload-label"></span>
-      </div>
+/* Shared pill container */
+.nav-pill {
+  display: flex;
+  gap: 2px;
+  background: var(--surface2);
+  border: 1.5px solid #2a2e40;
+  border-radius: 12px;
+  padding: 4px;
+}
 
-      <input type="file" id="file-input" multiple style="display:none">
-      <input type="file" id="folder-input" webkitdirectory multiple style="display:none">
-    </div>
+.nav-tab {
+  background: none;
+  border: none;
+  border-radius: 7px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 5px 11px;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  transition: color .15s, background .15s;
+  position: relative;
+}
+.nav-tab:hover { color: var(--text); background: rgba(255,255,255,.06); }
+.nav-tab.active {
+  color: var(--text);
+  background: rgba(79,127,255,.18);
+}
 
-    <!--  Overview tab  -->
-    <div id="tab-overview" class="tab-pane hidden">
-      <div class="dash-screen">
-        <div class="stat-cards" id="overview-sev-cards">
-          <div class="stat-card" id="card-critical" data-sev="critical">
-            <div class="stat-card-label">Critical</div>
-            <div class="stat-card-value critical" id="count-critical"></div>
-            <div class="stat-card-sub">open alerts</div>
-          </div>
-          <div class="stat-card" id="card-high" data-sev="high">
-            <div class="stat-card-label">High</div>
-            <div class="stat-card-value high" id="count-high"></div>
-            <div class="stat-card-sub">open alerts</div>
-          </div>
-          <div class="stat-card" id="card-medium" data-sev="medium">
-            <div class="stat-card-label">Medium</div>
-            <div class="stat-card-value medium" id="count-medium"></div>
-            <div class="stat-card-sub">open alerts</div>
-          </div>
-          <div class="stat-card" id="card-low" data-sev="low">
-            <div class="stat-card-label">Low</div>
-            <div class="stat-card-value low" id="count-low"></div>
-            <div class="stat-card-sub">open alerts</div>
-          </div>
-        </div>
+/* Alert badge */
+.nav-alert-badge {
+  background: var(--sev-critical);
+  border-radius: 8px;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
 
-        <div class="stat-cards" style="margin-top:10px">
-          <div class="stat-card">
-            <div class="stat-card-label">Events Today</div>
-            <div class="stat-card-value" id="count-events-today"></div>
-            <div class="stat-card-sub">total actions</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-card-label">Open Alerts</div>
-            <div class="stat-card-value" id="count-alerts-total"></div>
-            <div class="stat-card-sub">require attention</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-card-label">Auth Failures</div>
-            <div class="stat-card-value" id="count-auth-failures"></div>
-            <div class="stat-card-sub">today</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-card-label">File Deletes</div>
-            <div class="stat-card-value" id="count-deletes"></div>
-            <div class="stat-card-sub">today</div>
-          </div>
-        </div>
+/* Alert glow animations */
+.nav-tab[data-tab="alerts"].glow-critical { animation: glow-critical 2.5s ease-in-out infinite; }
+.nav-tab[data-tab="alerts"].glow-high     { animation: glow-high     2.5s ease-in-out infinite; }
+.nav-tab[data-tab="alerts"].glow-medium   { animation: glow-medium   2.5s ease-in-out infinite; }
+.nav-tab[data-tab="alerts"].glow-low      { animation: glow-low      2.5s ease-in-out infinite; }
+.nav-tab[data-tab="alerts"].glow-none     { animation: glow-none     2.5s ease-in-out infinite; }
 
-        <div class="overview-grid">
-          <div class="dash-card">
-            <div class="dash-card-header">
-              <span class="dash-card-title">Recent Alerts</span>
-              <span style="font-size:11px;color:var(--muted)" id="overview-poll-indicator">
-                <span class="poll-dot"></span>live
-              </span>
-            </div>
-            <div class="dash-card-body" id="overview-recent-alerts"><div class="dash-loading">Loading</div></div>
-          </div>
-          <div class="dash-card">
-            <div class="dash-card-header"><span class="dash-card-title">Live Activity</span></div>
-            <div class="dash-card-body" id="overview-live-feed"><div class="dash-loading">Loading</div></div>
-          </div>
-          <div class="dash-card">
-            <div class="dash-card-header">
-              <span class="dash-card-title">Top Source IPs</span>
-              <span style="font-size:11px;color:var(--muted)">today</span>
-            </div>
-            <div class="dash-card-body" id="overview-top-ips"><div class="dash-loading">Loading</div></div>
-          </div>
-          <div class="dash-card">
-            <div class="dash-card-header">
-              <span class="dash-card-title">Top Actors</span>
-              <span style="font-size:11px;color:var(--muted)">today</span>
-            </div>
-            <div class="dash-card-body" id="overview-top-actors"><div class="dash-loading">Loading</div></div>
-          </div>
-        </div>
-      </div>
-    </div>
+@keyframes glow-critical {
+  0%,100% { box-shadow: none; color: var(--muted); }
+  50%     { box-shadow: 0 0 12px rgba(224,82,82,.75);  color: #e05252; }
+}
+@keyframes glow-high {
+  0%,100% { box-shadow: none; color: var(--muted); }
+  50%     { box-shadow: 0 0 12px rgba(224,125,42,.75); color: #e07d2a; }
+}
+@keyframes glow-medium {
+  0%,100% { box-shadow: none; color: var(--muted); }
+  50%     { box-shadow: 0 0 12px rgba(201,187,58,.75); color: #c9bb3a; }
+}
+@keyframes glow-low {
+  0%,100% { box-shadow: none; color: var(--muted); }
+  50%     { box-shadow: 0 0 10px rgba(76,175,125,.65); color: #4caf7d; }
+}
+@keyframes glow-none {
+  0%,100% { box-shadow: none; color: var(--muted); }
+  50%     { box-shadow: 0 0 8px rgba(76,175,125,.4);   color: #4caf7d; }
+}
 
-    <!--  Alerts tab  -->
-    <div id="tab-alerts" class="tab-pane hidden">
-      <div class="dash-screen">
-        <div class="filters-row" id="alerts-filters">
-          <select id="af-severity">
-            <option value="">All Severities</option>
-            <option value="critical">Critical</option>
-            <option value="high">High</option>
-            <option value="medium">Medium</option>
-            <option value="low">Low</option>
-          </select>
-          <select id="af-rule">
-            <option value="">All Rules</option>
-            <option value="BF-001">BF-001</option><option value="BF-002">BF-002</option>
-            <option value="BF-003">BF-003</option><option value="BF-004">BF-004</option>
-            <option value="BF-005">BF-005</option><option value="BF-006">BF-006</option>
-            <option value="MD-001">MD-001</option><option value="MD-002">MD-002</option>
-            <option value="MD-003">MD-003</option><option value="MD-004">MD-004</option>
-            <option value="MD-005">MD-005</option><option value="MD-006">MD-006</option>
-          </select>
-          <select id="af-status">
-            <option value="">All Statuses</option>
-            <option value="open">Open</option>
-            <option value="investigating">Investigating</option>
-            <option value="dismissed">Dismissed</option>
-          </select>
-          <input type="date" id="af-from" title="From date">
-          <input type="date" id="af-to"   title="To date">
-          <button class="filter-btn" id="af-apply">Apply</button>
-          <button class="filter-btn ghost" id="af-reset">Reset</button>
-        </div>
-        <div id="alerts-table-wrap">
-          <table class="data-table" id="alerts-table">
-            <thead>
-              <tr>
-                <th>Severity</th><th>Rule</th><th>Title</th>
-                <th class="col-hide-tablet">Source / Actor</th>
-                <th>Time</th><th>Status</th><th></th>
-              </tr>
-            </thead>
-            <tbody id="alerts-tbody">
-              <tr><td colspan="7"><div class="dash-loading">Loading</div></td></tr>
-            </tbody>
-          </table>
-        </div>
-        <div id="alerts-pagination" class="pagination"></div>
-      </div>
-    </div>
+/* Centre column: wordmark only */
+#nav-centre {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  pointer-events: none;
+  /* stays absolutely centred within #nav-inner */
+}
+#nav-centre > * { pointer-events: auto; }
 
-    <!--  Events tab  -->
-    <div id="tab-events" class="tab-pane hidden">
-      <div class="dash-screen">
-        <div class="filters-row" id="events-filters">
-          <select id="ef-type">
-            <option value="">All Types</option>
-            <option value="auth.login.success">auth.login.success</option>
-            <option value="auth.login.failure">auth.login.failure</option>
-            <option value="auth.logout">auth.logout</option>
-            <option value="file.upload">file.upload</option>
-            <option value="file.download">file.download</option>
-            <option value="file.delete">file.delete</option>
-            <option value="file.rename">file.rename</option>
-            <option value="file.move">file.move</option>
-            <option value="dir.create">dir.create</option>
-            <option value="dir.delete">dir.delete</option>
-          </select>
-          <select id="ef-result">
-            <option value="">All Results</option>
-            <option value="success">Success</option>
-            <option value="failure">Failure</option>
-          </select>
-          <input type="text" id="ef-user" placeholder="Actor" style="width:120px">
-          <input type="date" id="ef-from" title="From date">
-          <input type="date" id="ef-to"   title="To date">
-          <button class="filter-btn" id="ef-apply">Apply</button>
-          <button class="filter-btn ghost" id="ef-reset">Reset</button>
-        </div>
-        <div id="events-table-wrap">
-          <table class="data-table" id="events-table">
-            <thead>
-              <tr>
-                <th>Time</th><th>Type</th>
-                <th class="col-hide-tablet">Actor</th>
-                <th class="col-hide-tablet">Source IP</th>
-                <th>Result</th>
-                <th class="col-hide-tablet">Path</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody id="events-tbody">
-              <tr><td colspan="7"><div class="dash-loading">Loading</div></td></tr>
-            </tbody>
-          </table>
-        </div>
-        <div id="events-pagination" class="pagination"></div>
-      </div>
-    </div>
+/* HOME NAS wordmark */
+#nav-wordmark {
+  font-family: var(--mono);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 5px;
+  text-transform: uppercase;
+  user-select: none;
+  animation: wordmark-fade 6s ease-in-out infinite;
+  pointer-events: none;
+  white-space: nowrap;
+}
+@keyframes wordmark-fade {
+  0%,100% {
+    color: #4f7fff;
+    text-shadow: 0 0 12px rgba(79,127,255,.7), 0 0 28px rgba(79,127,255,.3);
+  }
+  50% {
+    color: #4caf7d;
+    text-shadow: 0 0 12px rgba(76,175,125,.7), 0 0 28px rgba(76,175,125,.3);
+  }
+}
 
-  </div><!-- end #auth-shell -->
+/* Path bar — pill, shown below nav when inside a subdirectory */
+#path-bar {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 3px 10px 3px 6px;
+  max-width: 500px;
+  /* sits in the file-list flow, centred under the wordmark */
+  margin: 16px auto 0;
+  width: fit-content;
+}
 
-  <!-- Rename modal -->
-  <div id="modal-overlay" class="hidden">
-    <div class="modal">
-      <p id="modal-title">Rename</p>
-      <input id="modal-input" type="text">
-      <div class="modal-btns">
-        <button id="modal-cancel">Cancel</button>
-        <button id="modal-ok">OK</button>
-      </div>
-    </div>
-  </div>
+#path-home, #path-back {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 4px;
+  transition: color .15s;
+  line-height: 1;
+  flex-shrink: 0;
+}
+#path-home:hover { color: var(--accent); }
+#path-back:hover { color: var(--text); }
 
-  <script src="app.js"></script>
+/* separator between home/back and crumbs */
+#path-bar::after {
+  content: '';
+  /* nothing  divider handled by #path-pill margin */
+}
 
-  <script>
-  (function () {
+#path-pill {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  max-width: 380px;
+}
+#path-pill .crumb {
+  cursor: pointer;
+  color: #888da8;
+  white-space: nowrap;
+  transition: color .12s, background .12s, box-shadow .12s;
+  border-radius: 4px;
+  padding: 1px 4px;
+  margin: 0 -4px; /* cancel padding from layout */
+}
+#path-pill .crumb:hover { color: var(--accent); }
+#path-pill .sep { color: var(--border); }
+#path-pill .crumb.active { color: var(--muted); cursor: default; }
 
-    //  FABs 
-    document.getElementById('fab-upload').addEventListener('click', (e) => {
-      e.stopPropagation();
-      document.getElementById('upload-menu').classList.toggle('hidden');
-    });
-    document.getElementById('upload-menu-files').addEventListener('click', () => {
-      document.getElementById('upload-menu').classList.add('hidden');
-      document.getElementById('file-input').click();
-    });
-    document.getElementById('upload-menu-folder').addEventListener('click', () => {
-      document.getElementById('upload-menu').classList.add('hidden');
-      document.getElementById('folder-input').click();
-    });
-    document.addEventListener('click', () => {
-      document.getElementById('upload-menu').classList.add('hidden');
-    });
-    document.getElementById('fab-folder').addEventListener('click', () =>
-      document.getElementById('new-folder-btn').click());
+/* Drop target state — crumb in path bar being hovered during a drag */
+#path-pill .crumb.crumb-drop-target,
+#path-home.crumb-drop-target {
+  color: var(--accent) !important;
+  background: rgba(79,127,255,.15);
+  box-shadow: 0 0 0 1.5px var(--accent);
+}
 
-    //  File action button tooltips 
-    const fileList = document.getElementById('file-list');
-    new MutationObserver(() => {
-      fileList.querySelectorAll('.dl-btn:not([title])').forEach(b  => b.title = 'Download');
-      fileList.querySelectorAll('.ren-btn:not([title])').forEach(b => b.title = 'Rename');
-      fileList.querySelectorAll('.del-btn:not([title])').forEach(b => b.title = 'Delete');
-    }).observe(fileList, { childList: true, subtree: true });
+/* Sign out — bottom-left corner FAB, mirrors upload FAB */
+#logout-btn.corner-fab {
+  position: fixed;
+  bottom: 28px;
+  left: 28px;
+  z-index: 20;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: var(--surface2);
+  border: 1.5px solid #2a2e40;
+  color: var(--muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  transition: color .15s, border-color .15s, box-shadow .15s, transform .15s;
+}
+#logout-btn.corner-fab:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+  box-shadow: 0 0 12px rgba(224,82,82,.3);
+  transform: scale(1.08);
+}
+#logout-btn.corner-fab:active { transform: scale(.94); }
+#logout-btn.corner-fab::before {
+  content: attr(data-tip);
+  position: absolute;
+  left: calc(100% + 10px);
+  top: 50%;
+  transform: translateY(-50%);
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: var(--text);
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .15s;
+}
+#logout-btn.corner-fab:hover::before { opacity: 1; }
 
-    //  Path bar: home + back + breadcrumb trail 
-    const breadcrumb = document.getElementById('breadcrumb');
-    const pathBar    = document.getElementById('path-bar');
-    const pathPill   = document.getElementById('path-pill');
-    const pathHome   = document.getElementById('path-home');
-    const pathBack   = document.getElementById('path-back');
+/* Sync status — sits directly above logout, same circle geometry */
+#sync-btn.corner-fab {
+  position: fixed;
+  bottom: 84px; /* 28px logout + 46px logout height + 10px gap */
+  left: 28px;
+  z-index: 20;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: var(--surface2);
+  border: 1.5px solid #2a2e40;
+  color: var(--muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  transition: color .15s, border-color .15s, box-shadow .15s, transform .15s;
+}
+#sync-btn.corner-fab:hover { transform: scale(1.08); }
+#sync-btn.corner-fab:active { transform: scale(.94); }
+#sync-btn.corner-fab::before {
+  content: attr(data-tip);
+  position: absolute;
+  left: calc(100% + 10px);
+  top: 50%;
+  transform: translateY(-50%);
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: var(--text);
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .15s;
+  text-align: left;
+}
+#sync-btn.corner-fab:hover::before { opacity: 1; }
 
-    pathHome.addEventListener('click', () => {
-      // find the root crumb and click it
-      const root = breadcrumb.querySelector('.crumb[data-path="/"]');
-      if (root) root.click();
-    });
+/* Sync icon state animations — same fade-glow language as the Alerts tab's
+   glow-critical/-high/-medium/-low/-none (see "Alert glow animations"
+   above), so the two status indicators read consistently across the
+   dashboard. Each state fades between muted and its severity colour on a
+   2.5s cycle; syncing additionally spins, since fading alone doesn't read
+   as "actively in progress" the way a literal spinning sync icon does. */
 
-    pathBack.addEventListener('click', () => {
-      // find current path and navigate to parent
-      const active = breadcrumb.querySelector('.crumb.active');
-      const path   = active?.dataset.path || '/';
-      const parent = path.substring(0, path.lastIndexOf('/')) || '/';
-      const parentCrumb = breadcrumb.querySelector(`.crumb[data-path="${parent}"]`);
-      if (parentCrumb) parentCrumb.click();
-      else {
-        // fallback: use navigate directly if accessible
-        const root = breadcrumb.querySelector('.crumb[data-path="/"]');
-        if (root) root.click();
-      }
-    });
+#sync-btn.sync-idle       { animation: sync-glow-idle      2.5s ease-in-out infinite; }
+#sync-btn.sync-syncing    { animation: sync-glow-syncing   2.5s ease-in-out infinite,
+                                        sync-spin           1.4s linear infinite; }
+#sync-btn.sync-paused     { animation: sync-glow-paused    2.5s ease-in-out infinite; }
+#sync-btn.sync-error      { animation: sync-glow-error     2.5s ease-in-out infinite; }
+#sync-btn.sync-hash-mismatch { animation: sync-glow-hash-mismatch 1.4s ease-in-out infinite; }
 
-    function attachCrumbDrop(el, destPath) {
-      el.addEventListener('dragenter', e => {
-        e.preventDefault();
-        if (!window._dragSourcePath) return;
-        const srcParent = '/' + window._dragSourcePath.substring(0, window._dragSourcePath.lastIndexOf('/'));
-        const normalSrcParent = srcParent === '//' ? '/' : srcParent;
-        if (normalSrcParent === destPath) return; // already here
-        el.classList.add('crumb-drop-target');
-      });
-      el.addEventListener('dragover', e => {
-        e.preventDefault();
-        e.dataTransfer.dropEffect = 'move';
-      });
-      el.addEventListener('dragleave', e => {
-        if (!el.contains(e.relatedTarget)) el.classList.remove('crumb-drop-target');
-      });
-      el.addEventListener('drop', async e => {
-        e.preventDefault();
-        el.classList.remove('crumb-drop-target');
-        if (!window._dragSourcePath || !window._dragSourceName) return;
-        const srcFull  = '/' + window._dragSourcePath;
-        const destFull = (destPath === '/' ? '' : destPath) + '/' + window._dragSourceName;
-        if (srcFull === destFull) return;
-        await window._nasMove(srcFull, destFull);
-      });
-    }
+@keyframes sync-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
 
-    function syncPathBar() {
-      const onFiles = !document.getElementById('tab-files').classList.contains('hidden');
-      const crumbs  = breadcrumb.querySelectorAll('.crumb');
-      const inSubdir = crumbs.length > 1;
+/* idle — faint green fade, mirrors the Alerts tab's "all clear" glow-none */
+@keyframes sync-glow-idle {
+  0%,100% { box-shadow: none; color: var(--muted); border-color: #2a2e40; }
+  50%     { box-shadow: 0 0 8px rgba(76,175,125,.4); color: var(--sev-low); border-color: var(--sev-low); }
+}
 
-      document.getElementById('fab-cluster').classList.toggle('hidden', !onFiles);
+/* syncing — accent-blue fade, distinct from every severity colour since
+   "actively syncing" isn't a problem state */
+@keyframes sync-glow-syncing {
+  0%,100% { box-shadow: none; color: var(--muted); border-color: var(--accent); }
+  50%     { box-shadow: 0 0 12px rgba(79,127,255,.65); color: var(--accent); border-color: var(--accent); }
+}
 
-      if (!onFiles || !inSubdir) {
-        pathBar.classList.add('hidden');
-        return;
-      }
+/* paused — medium/amber-yellow fade */
+@keyframes sync-glow-paused {
+  0%,100% { box-shadow: none; color: var(--muted); border-color: #2a2e40; }
+  50%     { box-shadow: 0 0 10px rgba(201,187,58,.65); color: var(--sev-medium); border-color: var(--sev-medium); }
+}
 
-      pathBar.classList.remove('hidden');
+/* error — critical/red fade, slow 2.5s cycle (same timing as Alerts'
+   glow-critical) for a generic sync-engine-reported failure */
+@keyframes sync-glow-error {
+  0%,100% { box-shadow: none; color: var(--muted); border-color: #2a2e40; }
+  50%     { box-shadow: 0 0 12px rgba(224,82,82,.75); color: var(--sev-critical); border-color: var(--sev-critical); }
+}
 
-      // Home button is a drop target for root
-      attachCrumbDrop(pathHome, '/');
+/* hash-mismatch — high/orange, faster 1.4s cycle (vs error's 2.5s) plus a
+   slight scale pulse, so it's distinguishable from a generic error at a
+   glance rather than just a different colour at the same rhythm */
+@keyframes sync-glow-hash-mismatch {
+  0%,100% { box-shadow: none; color: var(--muted); border-color: #2a2e40; transform: scale(1); }
+  50%     { box-shadow: 0 0 14px rgba(224,125,42,.8); color: var(--sev-high); border-color: var(--sev-high); transform: scale(1.08); }
+}
 
-      // Build pill content from breadcrumb
-      pathPill.innerHTML = '';
-      crumbs.forEach((c, i) => {
-        const label     = i === 0 ? '/' : c.textContent;
-        const crumbPath = c.dataset.path; // e.g. "/" or "/idk"
-        const span      = document.createElement('span');
-        span.className  = c.classList.contains('active') ? 'crumb active' : 'crumb';
-        span.textContent = label;
-        if (!span.classList.contains('active'))
-          span.addEventListener('click', () => c.click());
-        // All crumbs (including root /) are drop targets
-        attachCrumbDrop(span, crumbPath);
-        pathPill.appendChild(span);
-        if (i < crumbs.length - 1) {
-          const sep = document.createElement('span');
-          sep.className = 'sep';
-          sep.textContent = ' / ';
-          pathPill.appendChild(sep);
-        }
-      });
-    }
+/* Sync logs panel — expands near the sync icon on click during error/hash-mismatch */
+#sync-logs-panel {
+  position: fixed;
+  bottom: 84px;
+  left: 86px;
+  z-index: 25;
+  width: 360px;
+  max-height: 420px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 12px 40px rgba(0,0,0,.5);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+#sync-logs-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface2);
+}
+#sync-logs-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+#sync-logs-close {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 2px 6px;
+  transition: color .15s;
+}
+#sync-logs-close:hover { color: var(--text); }
+#sync-logs-body {
+  overflow-y: auto;
+  padding: 8px 0;
+}
+.sync-log-row {
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+.sync-log-row:last-child { border-bottom: none; }
+.sync-log-time {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted);
+}
+.sync-log-level {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  padding: 1px 6px;
+  border-radius: 4px;
+  margin-left: 6px;
+}
+.sync-log-level.error   { background: var(--sev-critical-bg); color: var(--sev-critical); }
+.sync-log-level.warning { background: var(--sev-high-bg);     color: var(--sev-high); }
+.sync-log-level.info    { background: rgba(255,255,255,.05);  color: var(--muted); }
+.sync-log-message {
+  color: var(--text);
+  margin-top: 3px;
+  line-height: 1.4;
+}
 
-    document.querySelectorAll('.nav-tab').forEach(btn =>
-      btn.addEventListener('click', () => setTimeout(syncPathBar, 0)));
+@media (max-width: 600px) {
+  #sync-logs-panel {
+    left: 12px;
+    right: 12px;
+    width: auto;
+    bottom: 84px;
+  }
+}
 
-    new MutationObserver(syncPathBar)
-      .observe(breadcrumb, { childList: true, subtree: true, characterData: true });
+/* --- */
+.tab-pane {
+  margin-top: calc(var(--nav-h) + 4px);
+  flex: 1;
+}
 
-    //  Alert glow 
-    const alertBtn = document.querySelector('[data-tab="alerts"]');
-    function setAlertGlow(sev) {
-      alertBtn.classList.remove('glow-critical','glow-high','glow-medium','glow-low','glow-none');
-      alertBtn.classList.add('glow-' + (sev || 'none'));
-    }
+/* 
+   FILES TAB
+ */
+/* Hide original header entirely */
+#tab-files header { display: none; }
 
-    const origFetch = window.fetch;
-    window.fetch = function(url, opts) {
-      const p = origFetch.apply(this, arguments);
-      if (typeof url === 'string' && url.includes('/api/alerts/stats/summary')) {
-        p.then(r => r.clone().json()).then(data => {
-          const s = data?.by_severity || {};
-          if      ((s.critical?.open || 0) > 0) setAlertGlow('critical');
-          else if ((s.high?.open     || 0) > 0) setAlertGlow('high');
-          else if ((s.medium?.open   || 0) > 0) setAlertGlow('medium');
-          else if ((s.low?.open      || 0) > 0) setAlertGlow('low');
-          else                                   setAlertGlow('none');
-        }).catch(() => {});
-      }
-      return p;
-    };
+/* FAB cluster */
+#fab-cluster {
+  position: fixed;
+  bottom: 28px;
+  right: 28px;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: center;
+}
 
-    setAlertGlow('none');
-    syncPathBar();
-  })();
-  </script>
-</body>
-</html>
+.fab {
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform .15s, box-shadow .15s;
+  position: relative;
+}
+.fab:hover { transform: scale(1.08); }
+.fab:active { transform: scale(.94); }
+.fab::before {
+  content: attr(data-tip);
+  position: absolute;
+  right: calc(100% + 10px);
+  top: 50%;
+  transform: translateY(-50%);
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: var(--text);
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .15s;
+}
+.fab:hover::before { opacity: 1; }
+
+#fab-upload {
+  width: 46px; height: 46px;
+  background: var(--accent);
+  box-shadow: 0 4px 18px rgba(79,127,255,.38);
+  color: #fff;
+  font-size: 20px;
+}
+#fab-upload:hover { box-shadow: 0 6px 24px rgba(79,127,255,.55); }
+
+#fab-folder {
+  width: 36px; height: 36px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 15px;
+}
+#fab-folder:hover { color: var(--text); border-color: var(--muted); }
+
+/* File list */
+main#file-list {
+  padding: 24px 32px 100px;
+  max-width: 960px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.list-header {
+  display: grid;
+  grid-template-columns: 24px 1fr 90px 130px 80px;
+  gap: 8px;
+  padding: 6px 10px;
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+
+.file-row {
+  display: grid;
+  grid-template-columns: 24px 1fr 90px 130px 80px;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background .1s;
+  border-bottom: 1px solid var(--border);
+}
+.file-row:hover { background: var(--surface); }
+
+.file-icon { font-size: 14px; text-align: center; user-select: none; }
+
+/* Directory names  soft steel blue */
+.file-row[data-type="dir"] .file-name  { color: #7da4d8; }
+/* File names  slightly muted white */
+.file-row[data-type="file"] .file-name { color: #a8abbe; }
+
+.file-name {
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.file-size, .file-date {
+  color: var(--muted);
+  font-size: 12px;
+  font-family: var(--mono);
+  white-space: nowrap;
+}
+
+/* Action buttons */
+.file-actions {
+  display: flex;
+  gap: 4px;
+  justify-content: flex-end;
+  opacity: 0.28;
+  transition: opacity .15s;
+}
+.file-row:hover .file-actions { opacity: 1; }
+
+/* Action button CSS tooltips */
+.file-actions button {
+  background: none;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 3px 5px;
+  transition: background .12s, transform .1s;
+  position: relative;
+}
+.file-actions button::after {
+  content: attr(title);
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: var(--text);
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .12s;
+  z-index: 50;
+}
+.file-actions button:hover::after { opacity: 1; }
+.file-actions button:active { transform: scale(.88); }
+.file-actions .dl-btn  { color: #6080b0; }
+.file-actions .dl-btn:hover  { background: rgba(79,127,255,.12); color: var(--accent); }
+.file-actions .ren-btn { color: var(--rename); }
+.file-actions .ren-btn:hover { background: rgba(212,144,58,.12); }
+.file-actions .del-btn { color: var(--danger); }
+.file-actions .del-btn:hover { background: rgba(224,82,82,.12); }
+
+/* Drag handle — four braille dots, always occupies space, only visible on hover */
+.drag-handle {
+  color: var(--border);
+  cursor: grab;
+  font-size: 16px;
+  line-height: 1;
+  padding: 3px 4px;
+  border-radius: 4px;
+  transition: color .12s, background .12s;
+  user-select: none;
+  /* always visible slot so layout doesn't shift */
+}
+.file-row:hover .drag-handle {
+  color: var(--muted);
+}
+.drag-handle:hover {
+  color: var(--text) !important;
+  background: rgba(255,255,255,.07);
+  cursor: grab;
+}
+.drag-handle:active { cursor: grabbing; }
+
+/* Row being dragged */
+.file-row.dragging {
+  opacity: .35;
+  pointer-events: none;
+}
+
+/* Folder row being hovered over as a valid drop target */
+.file-row.drop-target {
+  background: rgba(79,127,255,.10);
+  outline: 1.5px dashed var(--accent);
+  outline-offset: -2px;
+  border-radius: var(--radius);
+}
+.file-row.drop-target .file-name {
+  color: var(--accent);
+}
+
+.empty-state {
+  text-align: center;
+  color: var(--muted);
+  padding: 80px 0;
+  font-size: 13px;
+}
+
+/* Drop overlay */
+#drop-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(79,127,255,.06);
+  border: 2px dashed var(--accent);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--accent);
+  pointer-events: none;
+}
+
+/* Upload bar */
+#upload-bar {
+  position: fixed;
+  bottom: 24px;
+  left: 24px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 18px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 240px;
+  box-shadow: 0 4px 24px rgba(0,0,0,.5);
+  z-index: 50;
+}
+#upload-progress {
+  flex: 1;
+  height: 3px;
+  background: var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+#upload-progress::after {
+  content: '';
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  width: var(--pct, 0%);
+  transition: width .2s;
+}
+#upload-label { font-size: 12px; color: var(--muted); white-space: nowrap; }
+
+/* Modal */
+#modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+}
+.modal {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 28px;
+  width: 340px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+#modal-title { font-size: 15px; font-weight: 500; }
+.modal input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: 14px;
+  outline: none;
+  padding: 9px 12px;
+}
+.modal input:focus { border-color: var(--accent); }
+.modal-btns { display: flex; justify-content: flex-end; gap: 8px; }
+.modal-btns button {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 7px 18px;
+  transition: opacity .15s;
+}
+.modal-btns button:last-child {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.modal-btns button:hover { opacity: .82; }
+
+/* 
+   DASHBOARD SHARED
+ */
+.dash-screen {
+  padding: 28px 32px 60px;
+  max-width: 1100px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+/* severity pill */
+.sev-pill {
+  border-radius: 4px;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .05em;
+  padding: 2px 7px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.sev-pill.critical { background: var(--sev-critical-bg); color: var(--sev-critical); }
+.sev-pill.high     { background: var(--sev-high-bg);     color: var(--sev-high); }
+.sev-pill.medium   { background: var(--sev-medium-bg);   color: var(--sev-medium); }
+.sev-pill.low      { background: var(--sev-low-bg);      color: var(--sev-low); }
+
+/* status pill */
+.status-pill {
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 7px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.status-pill.open          { background: rgba(224,82,82,.12);  color: var(--danger); }
+.status-pill.investigating { background: rgba(79,127,255,.12); color: var(--accent); }
+.status-pill.dismissed     { background: rgba(74,78,98,.15);   color: var(--muted); }
+
+/* result pill */
+.result-pill {
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 7px;
+  text-transform: uppercase;
+}
+.result-pill.success { background: rgba(76,175,125,.12); color: var(--sev-low); }
+.result-pill.failure { background: var(--sev-critical-bg); color: var(--sev-critical); }
+
+/* stat cards */
+.stat-cards {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 4px;
+}
+.stat-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px 18px;
+  cursor: pointer;
+  transition: border-color .15s;
+}
+.stat-card:hover { border-color: var(--muted); }
+.stat-card-label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+.stat-card-value {
+  font-size: 28px;
+  font-weight: 700;
+  font-family: var(--mono);
+  line-height: 1;
+}
+.stat-card-value.critical { color: var(--sev-critical); }
+.stat-card-value.high     { color: var(--sev-high); }
+.stat-card-value.medium   { color: var(--sev-medium); }
+.stat-card-value.low      { color: var(--sev-low); }
+.stat-card-sub { color: var(--muted); font-size: 11px; margin-top: 4px; }
+
+/* overview grid */
+.overview-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-top: 8px;
+}
+
+/* dash card */
+.dash-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.dash-card-header {
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  padding: 12px 16px;
+}
+.dash-card-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.dash-card-body { padding: 0; }
+
+/* mini rows */
+.mini-row {
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  display: flex;
+  gap: 10px;
+  padding: 10px 16px;
+  transition: background .1s;
+}
+.mini-row:last-child { border-bottom: none; }
+.mini-row:hover { background: rgba(255,255,255,.025); }
+.mini-row-main { flex: 1; min-width: 0; }
+.mini-row-title { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mini-row-sub {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mini-row-right { color: var(--muted); font-size: 11px; white-space: nowrap; }
+
+/* live dot */
+.live-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.live-dot.success { background: var(--sev-low); }
+.live-dot.failure { background: var(--sev-critical); }
+.live-dot.alert   { background: var(--sev-high); }
+.live-dot.neutral { background: var(--muted); }
+
+/* offender rows */
+.offender-row { align-items: center; border-bottom: 1px solid var(--border); display: flex; gap: 10px; padding: 9px 16px; }
+.offender-row:last-child { border-bottom: none; }
+.offender-rank  { color: var(--muted); font-family: var(--mono); font-size: 11px; min-width: 18px; text-align: right; }
+.offender-key   { flex: 1; font-family: var(--mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.offender-count { color: var(--muted); font-family: var(--mono); font-size: 11px; white-space: nowrap; }
+.offender-bar-wrap { width: 60px; height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; }
+.offender-bar   { height: 100%; background: var(--accent); border-radius: 2px; }
+.offender-bar.danger { background: var(--sev-critical); }
+
+/* filters */
+.filters-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+  align-items: center;
+}
+.filters-row select,
+.filters-row input[type="text"],
+.filters-row input[type="date"] {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: 13px;
+  height: 32px;
+  outline: none;
+  padding: 0 10px;
+  transition: border-color .15s;
+}
+.filters-row select:focus, .filters-row input:focus { border-color: var(--accent); }
+.filters-row select { cursor: pointer; }
+.filter-btn {
+  background: var(--accent);
+  border: none;
+  border-radius: var(--radius);
+  color: #fff;
+  cursor: pointer;
+  font-size: 13px;
+  height: 32px;
+  padding: 0 14px;
+  transition: background .15s;
+}
+.filter-btn:hover { background: var(--accent-h); }
+.filter-btn.ghost {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.filter-btn.ghost:hover { color: var(--text); border-color: var(--muted); }
+
+/* data table */
+.data-table { width: 100%; border-collapse: collapse; }
+.data-table th {
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .05em;
+  padding: 6px 12px;
+  text-align: left;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.data-table td {
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  padding: 0;
+  vertical-align: top;
+}
+.data-table tr:last-child td { border-bottom: none; }
+.data-table tr.expandable { cursor: pointer; }
+.data-table tr.expandable:hover td { background: rgba(255,255,255,.018); }
+
+.td-inner { padding: 10px 12px; display: flex; align-items: center; gap: 8px; }
+.td-mono  { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+
+/* expand panel */
+.expand-row td { padding: 0; border-bottom: 1px solid var(--border); }
+.expand-panel {
+  background: rgba(255,255,255,.012);
+  border-top: 1px solid var(--border);
+  padding: 16px 20px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+.expand-section-title { color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; margin-bottom: 8px; }
+.expand-field { margin-bottom: 8px; }
+.expand-label { color: var(--muted); font-size: 11px; margin-bottom: 2px; }
+.expand-value { font-size: 13px; font-family: var(--mono); word-break: break-all; }
+.expand-value.null { color: var(--muted); font-style: italic; }
+.evidence-pre {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--sev-low);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-x: auto;
+  padding: 12px;
+  white-space: pre;
+}
+
+/* status action buttons */
+.status-actions { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+.status-action-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 5px 12px;
+  transition: border-color .15s, color .15s, background .15s;
+}
+.status-action-btn:hover { border-color: var(--muted); color: var(--text); }
+.status-action-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.status-action-btn.primary:hover { background: var(--accent-h); }
+.status-action-btn.danger-btn:hover { border-color: var(--danger); color: var(--danger); }
+
+/* timeline */
+.timeline { grid-column: 1 / -1; }
+.timeline-list { list-style: none; position: relative; }
+.timeline-list::before {
+  content: '';
+  position: absolute;
+  left: 7px; top: 6px; bottom: 6px;
+  width: 1px;
+  background: var(--border);
+}
+.tl-item { display: flex; gap: 14px; padding: 5px 0; position: relative; align-items: flex-start; }
+.tl-dot {
+  width: 15px; height: 15px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  background: var(--surface);
+  flex-shrink: 0; margin-top: 1px; z-index: 1;
+}
+.tl-dot.alert-marker { background: var(--sev-high); border-color: var(--sev-high); }
+.tl-dot.failure { border-color: var(--sev-critical); background: var(--sev-critical-bg); }
+.tl-dot.success { border-color: var(--sev-low); background: var(--sev-low-bg); }
+.tl-content { flex: 1; min-width: 0; }
+.tl-time  { color: var(--muted); font-family: var(--mono); font-size: 11px; }
+.tl-event { font-size: 12px; font-family: var(--mono); margin-top: 1px; }
+.tl-event.alert-label { color: var(--sev-high); font-weight: 700; }
+.tl-meta  { color: var(--muted); font-size: 11px; margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* pagination */
+.pagination { align-items: center; display: flex; gap: 6px; justify-content: center; margin-top: 16px; }
+.page-btn {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  min-width: 32px;
+  padding: 5px 10px;
+  text-align: center;
+  transition: border-color .15s, color .15s;
+}
+.page-btn:hover:not(:disabled) { border-color: var(--muted); color: var(--text); }
+.page-btn.active { border-color: var(--accent); color: var(--accent); }
+.page-btn:disabled { opacity: .3; cursor: default; }
+.page-info { color: var(--muted); font-size: 12px; padding: 0 4px; }
+
+/* loading / empty */
+.dash-loading, .dash-empty { color: var(--muted); font-size: 13px; padding: 40px 0; text-align: center; }
+
+/* poll dot */
+.poll-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--sev-low);
+  display: inline-block;
+  margin-right: 5px;
+  animation: pulse 2s ease-in-out infinite;
+}
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+
+/* --- */
+@media (max-width: 768px) {
+  :root { --nav-h: 96px; }
+
+  #nav-inner {
+    flex-direction: column;
+    gap: 6px;
+    justify-content: center;
+  }
+  #nav-centre {
+    position: static;
+    transform: none;
+    order: -1;
+  }
+  #nav-tabs-left, #nav-tabs-right { gap: 1px; }
+  #path-bar { margin: 12px auto 0; }
+
+  .stat-cards      { grid-template-columns: repeat(2, 1fr); }
+  .overview-grid   { grid-template-columns: 1fr; }
+  .expand-panel    { grid-template-columns: 1fr; }
+  .col-hide-tablet { display: none; }
+  .dash-screen     { padding: 16px 16px 80px; }
+  main#file-list   { padding: 16px 16px 100px; }
+  .nav-tab         { font-size: 11px; padding: 5px 9px; }
+  #nav-wordmark    { font-size: 12px; letter-spacing: 3px; }
+}
+}
+@media (max-width: 520px) {
+  #nav-wordmark { display: none; }
+  :root { --nav-h: 72px; }
+  #nav-inner { flex-direction: row; }
+  #nav-right { display: none; }
+  .stat-cards   { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* Rules tab */
+.rules-intro {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+  margin-bottom: 28px;
+  max-width: 700px;
+}
+
+.rules-group {
+  margin-bottom: 28px;
+}
+
+.rules-group-header {
+  margin-bottom: 10px;
+}
+
+.rules-group-title {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: .04em;
+  margin-bottom: 3px;
+}
+
+.rules-group-sub {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.rules-group-sub code {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: #7da4d8;
+  background: rgba(125,164,216,.1);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+.rules-table {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.rules-row {
+  display: grid;
+  grid-template-columns: 72px 1fr 90px 80px;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.rules-row:last-child { border-bottom: none; }
+
+.rules-row.rules-header {
+  padding: 6px 16px;
+  background: var(--surface2);
+  border-bottom: 1px solid var(--border);
+}
+.rules-row.rules-header span {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.rule-id {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.rule-desc {
+  font-size: 13px;
+  color: var(--text);
+  line-height: 1.4;
+}
+
+.rule-window {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+@media (max-width: 600px) {
+  .rules-row {
+    grid-template-columns: 60px 1fr;
+    grid-template-rows: auto auto;
+  }
+  .rule-window { display: none; }
+  .sev-pill { justify-self: start; }
+}

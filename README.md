@@ -27,7 +27,7 @@ The USP is that it's not just a NAS with logging bolted on — the security plat
 - **NAS:** browse, upload, download, rename, move, and drag-to-move files and folders from any browser on your Tailscale network
 - **Folder upload:** upload entire directory trees from the browser — via picker or drag-and-drop — with directory structure preserved
 - **Audit log:** every auth event and filesystem action recorded to a local SQLite database, append-only, never mutated
-- **Real-time detection:** 12 rules covering brute-force login (BF-001 through BF-006) and mass-delete (MD-001 through MD-006), running within 250ms of each action
+- **Real-time detection:** 17 rules covering brute-force login (BF-001–006), mass-delete (MD-001–006), path traversal (PT-001–002), and data exfiltration (DX-001–003), running within 250ms of each action
 - **SOC dashboard:** Overview, Alert management, Event explorer, and investigation timelines — all in the same browser tab as the file manager
 
 ---
@@ -56,7 +56,8 @@ HomeNAS/
 │   │   ├── FilesystemController.h/cpp  — list, download, delete, mkdir, rename/move
 │   │   ├── UploadController.h/cpp      — multipart file upload
 │   │   ├── EventsController.h/cpp      — GET /api/events (audit log query API)
-│   │   └── AlertsController.h/cpp      — GET /api/alerts, PATCH /api/alerts/:id/status
+│   │   ├── AlertsController.h/cpp      — GET /api/alerts, PATCH /api/alerts/:id/status
+│   │   └── SyncController.h/cpp        — GET /api/sync/status, /api/sync/logs, POST start/pause/resume
 │   ├── filters/
 │   │   └── JwtFilter.h/cpp             — JWT validation middleware
 │   ├── services/
@@ -65,7 +66,9 @@ HomeNAS/
 │   │   ├── EventWriter.h/cpp           — background thread, batched SQLite writes
 │   │   ├── AlertTypes.h                — NasAlert struct, severity, rule ID constants
 │   │   ├── AlertWriter.h/cpp           — alert persistence and DB migration management
-│   │   └── EventAnalyzer.h/cpp         — 12 detection rules, post-flush analysis
+│   │   ├── EventAnalyzer.h/cpp         — 17 detection rules, post-flush analysis
+│   │   ├── SyncTypes.h                 — SyncState enum, SyncStatus, SyncLogEntry
+│   │   └── SyncManager.h/cpp           — background hashing + port rotation + stopgap listener
 │   ├── db/
 │   │   ├── schema_events.sql           — events table reference schema
 │   │   └── schema_alerts.sql           — alerts table and migration reference
@@ -74,6 +77,11 @@ HomeNAS/
 │   └── config.json
 │
 ├── webui/
+│   ├── index.html
+│   ├── style.css
+│   └── app.js
+│
+├── sync-portal/                        — standalone sync landing page (preview/stopgap — see README "Storage sync")
 │   ├── index.html
 │   ├── style.css
 │   └── app.js
@@ -130,16 +138,56 @@ BF-005 is treated as the most dangerous scenario — the attacker may have succe
 
 Directory deletes count toward all rules — deleting one top-level folder containing 500 files is equivalent to deleting 500 files individually for detection purposes.
 
+**Path traversal rules (IP-keyed):**
+
+| Rule | Condition | Severity |
+|---|---|---|
+| PT-001 | ≥5 path traversal attempts / same IP / 60s | Medium |
+| PT-002 | ≥20 path traversal attempts / same IP / 5min | High |
+
+Triggered when a request attempts to access a path outside the storage root (e.g. `../../etc/passwd`). One or two occurrences may be a misconfigured client; a burst indicates active probing.
+
+**Data exfiltration rules (actor-keyed):**
+
+| Rule | Condition | Severity |
+|---|---|---|
+| DX-001 | ≥50 downloads / same actor / 5min | Medium |
+| DX-002 | ≥200 downloads / same actor / 10min | High |
+| DX-003 | Login followed by ≥30 downloads / 5min | High |
+
+Keyed on the authenticated actor rather than source IP, so an attacker rotating exit nodes mid-session doesn't evade detection.
+
 ### Dashboard
 
 Four tabs, always accessible from the same browser session as the file manager:
 
 - **Overview** — severity cards (open alert counts), events today, auth failure count, recent alerts, live activity feed, top source IPs and actors with proportional failure bars. Severity cards are clickable — click Critical to jump straight to the filtered alert list. The Alerts tab pulses with a glow matching the highest open severity: red for critical, orange for high, yellow for medium, green for low, faint green when clear.
 - **Alerts** — full alert list with severity/rule/status/date filters, inline expand showing evidence JSON, status action buttons (Mark Investigating / Dismiss / Reopen), and a ±10 minute investigation timeline showing all related events before and after the alert fired.
+- **Rules** — read-only reference view of every detection rule (BF, MD, PT, DX) grouped by family, with condition, time window, and severity for each — a quick way to check what triggers an alert without reading source.
 - **Events** — full event log with type/result/user/date filters, inline expand showing every field including target path, secondary path, bytes transferred, and failure reason.
 - **Files** — the NAS file manager. Drag the `⠿` handle on any row to move it into another folder in the current directory, or drag it onto a breadcrumb segment in the path pill to move it up to a parent directory. Moves are recorded as `file.move` events and trigger mass-delete detection rules the same as any other deletion-class action.
 
 The dashboard polls every 15 seconds. The alert badge on the Alerts tab shows the live open alert count.
+
+### Storage sync ⚠️ preview / stopgap — not production-grade
+
+> **This feature is scaffolding, not a finished sync engine.** The icon, status API, and standalone landing page are real and wired against a real background thread — but there is no actual file-sync engine behind any of it yet, and the mechanism currently making the landing page reachable at all is an explicit, temporary stopgap (see below). Treat everything in this section as a development preview, not something to depend on for actual data synchronization.
+
+A sync status icon sits bottom-left, above the sign-out button. It reflects one of five states — idle, syncing, paused, error, or hash mismatch — each shown as a colour-coded fade animation matching the same visual language as the Alerts tab's severity glow (idle fades faint green, paused fades amber, error fades red on a slow 2.5s cycle, hash-mismatch fades orange on a faster, sharper cycle so the two failure modes don't read as the same thing, and syncing spins in accent blue). Hovering shows live progress and ETA, or the last-verified hash age when idle.
+
+Clicking the icon during normal operation (idle/syncing/paused) opens a separate sync landing page in a new tab — `sync-portal/`, a standalone page with no shared code or styling with the main dashboard. It's intentionally a different surface: the sync engine that will eventually drive it is designed to run on its own port, rotated daily, with no authentication of its own — reachability via a freshly-issued link from the authenticated main dashboard is the access control. Clicking the icon during an error or hash-mismatch state instead expands an inline logs panel in the main dashboard, without leaving it.
+
+**Hash verification** is real: the backend (`SyncManager`) periodically walks `nas_storage` and computes an aggregate integrity hash, independent of whether a sync is in progress. If the hash changes between checks while no sync was running, that's treated as drift HomeNAS can't account for and the state flips to hash-mismatch — this is the one state the backend can enter on its own, separately from anything a sync engine itself would report.
+
+**What's mocked:** the sync engine itself doesn't exist. Sync progress/ETA shown by the icon and portal are simulated by `SyncManager` advancing a percentage on a timer, not driven by any real file transfer.
+
+**The stopgap portal listener — read this before relying on it:** because no real sync service exists to bind the daily-rotating port, `SyncManager` currently forks a bare `python3 -m http.server` process and points it at `sync-portal/` on whatever port it just rotated to, purely so the landing page is reachable for development/testing rather than always 404ing. This is a deliberate, temporary hack with real limitations:
+- **No TLS.** The portal is served over plain HTTP, not HTTPS — unlike the main dashboard. The sync icon's click handler deliberately forces `http://` for this link rather than matching the main page's `https://`, specifically because of this.
+- **No real auth beyond port secrecy.** Anyone who learns the current port within its 24h window can reach the portal — by design, per the "rotating port is the access boundary" model — but there's no deeper protection layered on top the way a production sync service might add.
+- **Restart-fragile by nature of being a stopgap.** The forked process is detached and `KillMode=process` in the systemd unit specifically protects it from being killed alongside `nas-backend` restarts, but it has no supervision of its own — if it dies between rotations for any other reason, it stays dead until the next daily rotation.
+- **No real file-transfer behind it.** The portal shows status/ETA/hash info, all sourced from the same mocked `SyncManager` data the main dashboard polls — it is not actually moving any files.
+
+This entire block — `startPortalListener()`/`stopPortalListener()` in `SyncManager`, the `python3`/firewall-range additions in `setup.sh`, and `KillMode=process` in the systemd unit — exists to do one job: make the landing page openable today. It is explicitly meant to be deleted once a real sync engine exists and owns its own port and listener lifecycle. See the devlog for the full reasoning.
 
 ### Data storage
 
@@ -188,6 +236,15 @@ All endpoints require `Authorization: Bearer <token>` except `/api/auth/login`.
 | GET | `/api/alerts/:id` | Single alert with full evidence JSON |
 | GET | `/api/alerts/stats/summary` | Open counts by severity |
 | PATCH | `/api/alerts/:id/status` | Set status: `open`, `investigating`, or `dismissed` |
+
+### Sync (preview — see "Storage sync" above)
+| Method | Endpoint | Description |
+|---|---|---|
+| GET | `/api/sync/status` | State, percent/ETA (mocked), last verified hash, current rotating port |
+| GET | `/api/sync/logs?limit=` | Recent sync log entries (in-memory, not persisted to SQLite) |
+| POST | `/api/sync/start` | Mock: begins a simulated sync run |
+| POST | `/api/sync/pause` | Mock: pauses an in-progress simulated sync |
+| POST | `/api/sync/resume` | Mock: resumes a paused simulated sync |
 
 ---
 
@@ -288,7 +345,12 @@ sudo ausearch -m avc -ts recent | audit2why
     "admin_username":     "admin",
     "admin_password":     "CHANGE THIS",
     "events_db_path":     "~/nas/nas_storage/.nas-meta/events.db",
-    "alerts_db_path":     "~/nas/nas_storage/.nas-meta/alerts.db"
+    "alerts_db_path":     "~/nas/nas_storage/.nas-meta/alerts.db",
+    "sync": {
+      "hash_check_interval_seconds":    300,
+      "port_rotation_interval_seconds": 86400,
+      "portal_dir": "~/nas/nas_main/sync-portal"
+    }
   }
 }
 ```
@@ -324,10 +386,15 @@ Folder upload via picker (`webkitdirectory`) and drag-and-drop directory travers
 
 JWTs are stateless — logout is client-side only. To invalidate all active sessions immediately, rotate `jwt_secret` and restart the backend. Passwords are stored as plaintext in `config.json`, acceptable for personal single-user use on a private Tailscale network.
 
+### Storage sync stopgap listener
+
+The sync portal's reachability currently depends on a forked `python3 -m http.server` process spawned and rotated by `SyncManager` — not a hardened or supervised service. It has no TLS, relies entirely on port secrecy for access control, and has no restart logic of its own beyond what `SyncManager` does on the next daily rotation. See "Storage sync" above for the full breakdown. This exists purely so the feature is testable before the real sync engine is built — don't point real data at it.
+
 ---
 
 ## Roadmap
 
+- **Storage Sync — real engine:** the sync icon, status/logs API, and standalone landing page (`sync-portal/`) are built and wired to a real background hashing + port-rotation thread, but the actual file-sync engine (the thing that moves data) doesn't exist yet — progress/ETA are simulated, and the portal is currently reachable only via a stopgap unsupervised listener (see "Storage sync" above). Building the real engine, and replacing the stopgap with whatever the real engine's own listener turns out to be, is next.
 - **Phase 2.55 — SOAR:** Manual response actions from the dashboard: block IP, invalidate sessions, disable user account.
 - **Phase 2.56 — Notifications:** Email alerts on high/critical severity triggers.
 - **Phase 3 — Storage Intelligence:** Duplicate detection, stale file identification, storage usage trends.

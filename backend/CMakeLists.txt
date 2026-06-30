@@ -25,6 +25,8 @@ add_executable(
     services/EventWriter.cpp
     services/AlertWriter.cpp
     services/EventAnalyzer.cpp
+    controllers/SyncController.cpp
+    services/SyncManager.cpp
 )
 
 target_link_libraries(nas_backend PRIVATE Drogon::Drogon)

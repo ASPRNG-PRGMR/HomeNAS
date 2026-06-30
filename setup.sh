@@ -19,7 +19,8 @@ dnf install -y \
     sqlite-devel \
     git \
     nginx \
-    tailscale
+    tailscale \
+    python3
 
 echo "==> Installing Drogon"
 if [ -f /usr/local/lib/cmake/Drogon/DrogonConfig.cmake ]; then
@@ -40,13 +41,14 @@ else
     ldconfig
 fi
 
+
 echo "==> Creating NAS system user"
 id -u "$NAS_USER" &>/dev/null || \
     useradd -r -s /sbin/nologin -d "$INSTALL_DIR" "$NAS_USER"
 
 echo "==> Creating directories"
 mkdir -p "$NAS_ROOT"
-mkdir -p "$INSTALL_DIR"/{webui,logs,tmp_uploads}
+mkdir -p "$INSTALL_DIR"/{webui,sync-portal,logs,tmp_uploads}
 
 
 # TO PUT HOME PATHS IN RESPECTIVE FILES
@@ -55,6 +57,7 @@ mkdir -p "$INSTALL_DIR"/{webui,logs,tmp_uploads}
 # nas_root fallback. Without this, that one fallback string would stay
 # literally "home_path/..." forever (harmless as long as config.json's
 # events_db_path key is always present, but a landmine if it's ever missing).
+
 sed -i "s|home_path|$_HOME|g"\
         backend/controllers/FilesystemController.cpp \
         backend/controllers/UploadController.cpp \
@@ -79,6 +82,9 @@ cp config.json "$INSTALL_DIR"
 echo "==> Deploying Web UI"
 cp -r webui/* "$INSTALL_DIR/webui/"
 
+echo "==> Deploying sync portal (standalone, served on the daily-rotating port)"
+cp -r sync-portal/* "$INSTALL_DIR/sync-portal/"
+
 echo "==> Setting ownership"
 chown -R "$NAS_USER":"$NAS_USER" "$NAS_ROOT"
 chown -R "$NAS_USER":"$NAS_USER" "$INSTALL_DIR"
@@ -92,6 +98,14 @@ setsebool -P httpd_can_network_connect 1
 semanage fcontext -a -t httpd_sys_content_t "$INSTALL_DIR/webui(/.*)?" || \
 semanage fcontext -m -t httpd_sys_content_t "$INSTALL_DIR/webui(/.*)?"
 restorecon -Rv "$INSTALL_DIR/webui"
+
+# Label the sync-portal directory the same way — it's also static content,
+# served by whatever process ends up listening on the daily-rotating sync
+# port (not yet automated — see README "Storage sync" section). Labeling it
+# now means no SELinux surprise later when that listener is added.
+semanage fcontext -a -t httpd_sys_content_t "$INSTALL_DIR/sync-portal(/.*)?" || \
+semanage fcontext -m -t httpd_sys_content_t "$INSTALL_DIR/sync-portal(/.*)?"
+restorecon -Rv "$INSTALL_DIR/sync-portal"
 
 # Label nas_root so the backend can read/write it
 semanage fcontext -a -t var_t "$NAS_ROOT(/.*)?" || true
@@ -114,6 +128,11 @@ systemctl enable --now nginx
 echo "==> Opening firewall ports"
 firewall-cmd --permanent --add-service=https
 firewall-cmd --permanent --add-service=http
+# Sync portal listener (stopgap) binds somewhere in this range, rotating
+# daily — see SyncManager::maybeRotatePort(). Opened as a range rather than
+# a single port since the exact port isn't known until first rotation, and
+# changes every day after that.
+firewall-cmd --permanent --add-port=49152-65535/tcp
 firewall-cmd --reload
 
 echo "==> Enabling Tailscale"
@@ -129,8 +148,7 @@ chmod o+rx $_HOME/nas/nas_main
 chmod -R o+rX $_HOME/nas/nas_main/webui
 systemctl daemon-reload
 sudo systemctl reload nginx
-systemctl enable nas-backend
-systemctl start nas-backend
+systemctl restart nas-backend
 
 echo ""
 echo "======================================================"
