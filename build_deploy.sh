@@ -1,5 +1,15 @@
-sudo systemctl stop nas-backend
-INSTALL_DIR="/home/$SUDO_USER/nas/nas_main"
+#!/usr/bin/env bash
+# build_deploy.sh — rebuild backend and redeploy webui in one shot
+# Run as root: sudo bash build_deploy.sh
+
+set -euo pipefail
+
+_USER="${SUDO_USER:-$USER}"
+_HOME="$(eval echo "~$_USER")"
+INSTALL_DIR="$_HOME/nas/nas_main"
+
+echo "==> Stopping nas-backend"
+systemctl stop nas-backend
 
 echo "==> Building backend"
 cmake -S backend -B backend/build \
@@ -7,12 +17,41 @@ cmake -S backend -B backend/build \
     -GNinja
 cmake --build backend/build -j"$(nproc)"
 
+echo "==> Deploying backend binary"
 if [ -f "$INSTALL_DIR/nas_backend" ]; then
-      echo "nas_backend found in nas_main - removing it..."
-      rm -f "$INSTALL_DIR/nas_backend"
+    echo "    Removing old binary..."
+    rm -f "$INSTALL_DIR/nas_backend"
 fi
-sudo cp backend/build/nas_backend $INSTALL_DIR/nas_backend
+cp backend/build/nas_backend "$INSTALL_DIR/nas_backend"
+chown "$_USER":"$_USER" "$INSTALL_DIR/nas_backend"
 
-sudo systemctl start nas-backend
-sudo -u "$SUDO_USER" DISPLAY=:0 DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u "$SUDO_USER")/bus" firefox nas.local &
+echo "==> Deploying Web UI"
+cp -r webui/* "$INSTALL_DIR/webui/"
+chown -R "$_USER":"$_USER" "$INSTALL_DIR/webui"
 
+echo "==> Starting nas-backend"
+systemctl start nas-backend
+
+echo "==> Waiting for backend to come up..."
+sleep 1
+if systemctl is-active --quiet nas-backend; then
+    echo "    nas-backend is running."
+else
+    echo "    nas-backend failed to start. Check logs:"
+    echo "    sudo journalctl -u nas-backend -n 40 --no-pager"
+    exit 1
+fi
+
+echo "==> Opening nas.local"
+sudo -u "$_USER" \
+    DISPLAY=:0 \
+    DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u "$_USER")/bus" \
+    xdg-open "https://nas.local" 2>/dev/null || \
+sudo -u "$_USER" \
+    DISPLAY=:0 \
+    DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u "$_USER")/bus" \
+    firefox "https://nas.local" 2>/dev/null || \
+    echo "    Could not launch browser automatically. Open https://nas.local manually."
+
+echo ""
+echo "Done."
