@@ -135,6 +135,7 @@ void SyncManager::runLoop() {
         checkHash();
         maybeRotatePort();
         advanceMockSync();
+        checkPortalListener(); // respawn if it died between rotations
     }
 }
 
@@ -260,12 +261,53 @@ void SyncManager::stopPortalListener() {
     if (pid <= 0) return;
 
     kill(pid, SIGTERM);
-    // Reap without blocking the caller indefinitely — WNOHANG means a
-    // slow-to-exit child won't stall rotation or shutdown; it'll just
-    // become a brief zombie reaped on the next rotation/shutdown call or
-    // by init's default handling. Acceptable for a once-a-day stopgap.
+
+    // Give the child up to 500ms to exit cleanly before giving up — avoids
+    // leaving a zombie while still not blocking the caller (rotation or
+    // shutdown) for a meaningful amount of time. 10 * 50ms covers the
+    // typical python3 http.server shutdown time comfortably.
+    for (int i = 0; i < 10; ++i) {
+        int status = 0;
+        pid_t result = waitpid(pid, &status, WNOHANG);
+        if (result == pid) return; // reaped cleanly
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+
+    // Child didn't exit in time — escalate to SIGKILL and reap.
+    kill(pid, SIGKILL);
+    int status = 0;
+    waitpid(pid, &status, 0); // blocking reap; child won't survive SIGKILL
+}
+
+// ── liveness check ────────────────────────────────────────────────────────────
+
+void SyncManager::checkPortalListener() {
+    pid_t pid;
+    int currentPort;
+    {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        pid = portalListenerPid_;
+        currentPort = status_.currentPort;
+    }
+
+    if (pid <= 0 || currentPort <= 0 || portalDir_.empty()) return;
+
+    // kill(pid, 0) — probe only, no signal sent. Returns 0 if the process
+    // still exists, -1 with errno == ESRCH if it's gone/zombie.
+    if (kill(pid, 0) == 0) return; // still running, nothing to do
+
+    // Process is gone between rotations — reap any zombie state and respawn.
     int status = 0;
     waitpid(pid, &status, WNOHANG);
+    {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        portalListenerPid_ = -1;
+    }
+    log("warning", "Portal listener (pid " + std::to_string(pid)
+                    + ") exited unexpectedly — respawning on port "
+                    + std::to_string(currentPort));
+    startPortalListener(currentPort);
+}
 }
 
 void SyncManager::advanceMockSync() {

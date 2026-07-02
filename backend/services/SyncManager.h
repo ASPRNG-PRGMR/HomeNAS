@@ -91,6 +91,7 @@ private:
     // is meant to be deleted once a real sync engine exists.
     void startPortalListener(int port);
     void stopPortalListener();
+    void checkPortalListener(); // called each runLoop() tick to respawn if dead
 
     void log(const std::string &level, const std::string &message);
     static std::string computeStorageHash(const std::string &root);

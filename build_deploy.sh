@@ -28,6 +28,9 @@ chown "$_USER":"$_USER" "$INSTALL_DIR/nas_backend"
 echo "==> Deploying Web UI"
 cp -r webui/* "$INSTALL_DIR/webui/"
 chown -R "$_USER":"$_USER" "$INSTALL_DIR/webui"
+cp -r sync-portal/* "$INSTALL_DIR/sync-portal/"
+chown -R "$_USER":"$_USER" "$INSTALL_DIR/sync-portal"
+chmod -R o+rX "$INSTALL_DIR/sync-portal"
 
 echo "==> Starting nas-backend"
 systemctl start nas-backend
