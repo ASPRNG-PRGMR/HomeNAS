@@ -91,6 +91,35 @@ function showApp() {
   startPolling();
 }
 
+// ── theme ─────────────────────────────────────────────────────────────────────
+// The initial data-theme is set by the inline script in <head> so it lands
+// before first paint; this only handles toggling and label sync afterwards.
+const themeToggle = document.getElementById('theme-toggle');
+
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  // Show the theme you'd get by clicking, not the one you're in — the button
+  // is an action, and labelling it with the current state makes the click
+  // feel like it does the opposite of what it says.
+  const goingTo = theme === 'dark' ? 'light' : 'dark';
+  const label   = `Switch to ${goingTo} theme`;
+  themeToggle.querySelector('.theme-icon').innerHTML =
+    theme === 'dark' ? '&#9728;' : '&#9790;';   /* ☀ sun : ☾ moon */
+  themeToggle.title = label;
+  themeToggle.setAttribute('aria-label', label);
+}
+
+themeToggle.addEventListener('click', () => {
+  const next = document.documentElement.getAttribute('data-theme') === 'dark'
+    ? 'light' : 'dark';
+  applyTheme(next);
+  // Persisted in localStorage, not sessionStorage (where the auth token
+  // lives): a theme choice should outlive the session, a token must not.
+  try { localStorage.setItem('nas_theme', next); } catch (e) { /* storage blocked */ }
+});
+
+applyTheme(document.documentElement.getAttribute('data-theme') || 'dark');
+
 // ── tab navigation ────────────────────────────────────────────────────────────
 document.querySelectorAll('.nav-tab').forEach(btn => {
   btn.addEventListener('click', () => switchTab(btn.dataset.tab));

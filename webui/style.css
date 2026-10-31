@@ -1,20 +1,50 @@
 /* --- */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+/* Dark is the default theme. The light theme below overrides only the colour
+   tokens, so every rule in this file must resolve colours through a var() —
+   a hardcoded hex or a white rgba() overlay silently survives the theme
+   switch and is how you get black-on-black text in light mode. */
 :root {
   --bg:            #070809;
   --surface:       #0d0f13;
   --surface2:      #12151b;
   --border:        #1c1f28;
+  --border-strong: #2a2e40;
   --text:          #d0d2de;
+  --text-soft:     #a8abbe;
+  --text-dim:      #888da8;
   --muted:         #4a4e62;
   --accent:        #4f7fff;
   --accent-h:      #3d6bef;
   --danger:        #e05252;
   --rename:        #d4903a;
+  --link:          #7da4d8;
+  --link-dim:      #6080b0;
+  --on-accent:     #fff;
   --radius:        8px;
   --mono:          'JetBrains Mono', 'Fira Mono', monospace;
   --nav-h:         80px;
+
+  /* Hover/selection overlays. Light-on-dark here, dark-on-light in the light
+     theme — these are the tokens that break most visibly if hardcoded. */
+  --hover-1:       rgba(255,255,255,.07);
+  --hover-2:       rgba(255,255,255,.06);
+  --hover-3:       rgba(255,255,255,.025);
+  --hover-4:       rgba(255,255,255,.018);
+  --hover-5:       rgba(255,255,255,.012);
+
+  --accent-soft:    rgba(79,127,255,.18);
+  --accent-faint:   rgba(79,127,255,.10);
+  --accent-fainter: rgba(79,127,255,.06);
+  --accent-glow:    rgba(79,127,255,.38);
+  --accent-glow-h:  rgba(79,127,255,.55);
+  --link-bg:        rgba(125,164,216,.1);
+  --danger-bg:      rgba(224,82,82,.12);
+  --rename-bg:      rgba(212,144,58,.12);
+
+  --shadow:        rgba(0,0,0,.5);
+  --scrim:         rgba(0,0,0,.7);
 
   --sev-critical:    #e05252;
   --sev-high:        #e07d2a;
@@ -26,12 +56,64 @@
   --sev-low-bg:      rgba(76,175,125,.10);
 }
 
+/* Light theme. Severity hues are darkened rather than reused: the dark-theme
+   values are tuned for contrast against #070809 and fail WCAG AA as text on a
+   near-white surface. */
+html[data-theme="light"] {
+  --bg:            #f4f5f7;
+  --surface:       #ffffff;
+  --surface2:      #f8f9fb;
+  --border:        #e2e5ed;
+  --border-strong: #cfd4e0;
+  --text:          #1b1e27;
+  --text-soft:     #3d4254;
+  --text-dim:      #5c6274;
+  /* #696f80 rather than a lighter grey: --muted is used for real secondary
+     copy and inactive nav tabs, so it needs 4.5:1 body-text contrast, which
+     it clears against both --bg (4.60:1) and --surface (5.02:1). */
+  --muted:         #696f80;
+  --accent:        #2f5fe0;
+  --accent-h:      #244fc8;
+  --danger:        #c3362b;
+  --rename:        #8f5e12;
+  --link:          #2f5fe0;
+  --link-dim:      #4a6fb5;
+
+  --hover-1:       rgba(0,0,0,.055);
+  --hover-2:       rgba(0,0,0,.045);
+  --hover-3:       rgba(0,0,0,.030);
+  --hover-4:       rgba(0,0,0,.022);
+  --hover-5:       rgba(0,0,0,.016);
+
+  --accent-soft:    rgba(47,95,224,.14);
+  --accent-faint:   rgba(47,95,224,.09);
+  --accent-fainter: rgba(47,95,224,.05);
+  --accent-glow:    rgba(47,95,224,.28);
+  --accent-glow-h:  rgba(47,95,224,.42);
+  --link-bg:        rgba(47,95,224,.09);
+  --danger-bg:      rgba(195,54,43,.10);
+  --rename-bg:      rgba(143,94,18,.10);
+
+  --shadow:        rgba(16,22,40,.14);
+  --scrim:         rgba(16,22,40,.45);
+
+  --sev-critical:    #c3362b;
+  --sev-high:        #ab5a0b;
+  --sev-medium:      #7d7108;
+  --sev-low:         #27724a;
+  --sev-critical-bg: rgba(195,54,43,.10);
+  --sev-high-bg:     rgba(171,90,11,.10);
+  --sev-medium-bg:   rgba(125,113,8,.10);
+  --sev-low-bg:      rgba(39,114,74,.10);
+}
+
 body {
   background: var(--bg);
   color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   font-size: 14px;
   min-height: 100vh;
+  transition: background-color .2s ease, color .2s ease;
 }
 
 .hidden { display: none !important; }
@@ -79,7 +161,7 @@ body {
   background: var(--accent);
   border: none;
   border-radius: var(--radius);
-  color: #fff;
+  color: var(--on-accent);
   cursor: pointer;
   font-size: 14px;
   font-weight: 500;
@@ -140,12 +222,53 @@ body {
   flex-shrink: 0;
 }
 
+/* Theme toggle — sits immediately left of the right-hand pill. Kept outside
+   .nav-pill on purpose: the pills carry tab semantics (one of them is always
+   .active), and a toggle living inside one reads as a sixth tab. */
+#nav-right-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+#theme-toggle {
+  background: var(--surface2);
+  border: 1.5px solid var(--border-strong);
+  border-radius: 50%;
+  color: var(--text-dim);
+  cursor: pointer;
+  width: 34px;
+  height: 34px;
+  font-size: 14px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color .15s, background .15s, border-color .15s;
+  /* The glyphs sit slightly high in their em box; nudge for optical centring */
+  padding: 0;
+}
+#theme-toggle:hover {
+  color: var(--text);
+  background: var(--hover-1);
+  border-color: var(--muted);
+}
+#theme-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+#theme-toggle .theme-icon {
+  display: block;
+  transition: transform .25s ease;
+}
+#theme-toggle:hover .theme-icon { transform: rotate(25deg); }
+
 /* Shared pill container */
 .nav-pill {
   display: flex;
   gap: 2px;
   background: var(--surface2);
-  border: 1.5px solid #2a2e40;
+  border: 1.5px solid var(--border-strong);
   border-radius: 12px;
   padding: 4px;
 }
@@ -166,17 +289,17 @@ body {
   transition: color .15s, background .15s;
   position: relative;
 }
-.nav-tab:hover { color: var(--text); background: rgba(255,255,255,.06); }
+.nav-tab:hover { color: var(--text); background: var(--hover-2); }
 .nav-tab.active {
   color: var(--text);
-  background: rgba(79,127,255,.18);
+  background: var(--accent-soft);
 }
 
 /* Alert badge */
 .nav-alert-badge {
   background: var(--sev-critical);
   border-radius: 8px;
-  color: #fff;
+  color: var(--on-accent);
   font-size: 9px;
   font-weight: 700;
   min-width: 15px;
@@ -196,23 +319,23 @@ body {
 
 @keyframes glow-critical {
   0%,100% { box-shadow: none; color: var(--muted); }
-  50%     { box-shadow: 0 0 12px rgba(224,82,82,.75);  color: #e05252; }
+  50%     { box-shadow: 0 0 12px rgba(224,82,82,.75);  color: var(--sev-critical); }
 }
 @keyframes glow-high {
   0%,100% { box-shadow: none; color: var(--muted); }
-  50%     { box-shadow: 0 0 12px rgba(224,125,42,.75); color: #e07d2a; }
+  50%     { box-shadow: 0 0 12px rgba(224,125,42,.75); color: var(--sev-high); }
 }
 @keyframes glow-medium {
   0%,100% { box-shadow: none; color: var(--muted); }
-  50%     { box-shadow: 0 0 12px rgba(201,187,58,.75); color: #c9bb3a; }
+  50%     { box-shadow: 0 0 12px rgba(201,187,58,.75); color: var(--sev-medium); }
 }
 @keyframes glow-low {
   0%,100% { box-shadow: none; color: var(--muted); }
-  50%     { box-shadow: 0 0 10px rgba(76,175,125,.65); color: #4caf7d; }
+  50%     { box-shadow: 0 0 10px rgba(76,175,125,.65); color: var(--sev-low); }
 }
 @keyframes glow-none {
   0%,100% { box-shadow: none; color: var(--muted); }
-  50%     { box-shadow: 0 0 8px rgba(76,175,125,.4);   color: #4caf7d; }
+  50%     { box-shadow: 0 0 8px rgba(76,175,125,.4);   color: var(--sev-low); }
 }
 
 /* Centre column: wordmark only */
@@ -243,11 +366,11 @@ body {
 }
 @keyframes wordmark-fade {
   0%,100% {
-    color: #4f7fff;
+    color: var(--accent);
     text-shadow: 0 0 12px rgba(79,127,255,.7), 0 0 28px rgba(79,127,255,.3);
   }
   50% {
-    color: #4caf7d;
+    color: var(--sev-low);
     text-shadow: 0 0 12px rgba(76,175,125,.7), 0 0 28px rgba(76,175,125,.3);
   }
 }
@@ -299,7 +422,7 @@ body {
 }
 #path-pill .crumb {
   cursor: pointer;
-  color: #888da8;
+  color: var(--text-dim);
   white-space: nowrap;
   transition: color .12s, background .12s, box-shadow .12s;
   border-radius: 4px;
@@ -314,7 +437,7 @@ body {
 #path-pill .crumb.crumb-drop-target,
 #path-home.crumb-drop-target {
   color: var(--accent) !important;
-  background: rgba(79,127,255,.15);
+  background: var(--accent-soft);
   box-shadow: 0 0 0 1.5px var(--accent);
 }
 
@@ -328,7 +451,7 @@ body {
   height: 46px;
   border-radius: 50%;
   background: var(--surface2);
-  border: 1.5px solid #2a2e40;
+  border: 1.5px solid var(--border-strong);
   color: var(--muted);
   cursor: pointer;
   display: flex;
@@ -374,7 +497,7 @@ body {
   height: 46px;
   border-radius: 50%;
   background: var(--surface2);
-  border: 1.5px solid #2a2e40;
+  border: 1.5px solid var(--border-strong);
   color: var(--muted);
   cursor: pointer;
   display: flex;
@@ -470,7 +593,7 @@ body {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 12px;
-  box-shadow: 0 12px 40px rgba(0,0,0,.5);
+  box-shadow: 0 12px 40px var(--shadow);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -600,11 +723,11 @@ body {
 #fab-upload {
   width: 46px; height: 46px;
   background: var(--accent);
-  box-shadow: 0 4px 18px rgba(79,127,255,.38);
-  color: #fff;
+  box-shadow: 0 4px 18px var(--accent-glow);
+  color: var(--on-accent);
   font-size: 20px;
 }
-#fab-upload:hover { box-shadow: 0 6px 24px rgba(79,127,255,.55); }
+#fab-upload:hover { box-shadow: 0 6px 24px var(--accent-glow-h); }
 
 #fab-folder {
   width: 36px; height: 36px;
@@ -652,9 +775,9 @@ main#file-list {
 .file-icon { font-size: 14px; text-align: center; user-select: none; }
 
 /* Directory names  soft steel blue */
-.file-row[data-type="dir"] .file-name  { color: #7da4d8; }
+.file-row[data-type="dir"] .file-name  { color: var(--link); }
 /* File names  slightly muted white */
-.file-row[data-type="file"] .file-name { color: #a8abbe; }
+.file-row[data-type="file"] .file-name { color: var(--text-soft); }
 
 .file-name {
   font-size: 13px;
@@ -712,12 +835,12 @@ main#file-list {
 }
 .file-actions button:hover::after { opacity: 1; }
 .file-actions button:active { transform: scale(.88); }
-.file-actions .dl-btn  { color: #6080b0; }
+.file-actions .dl-btn  { color: var(--link-dim); }
 .file-actions .dl-btn:hover  { background: rgba(79,127,255,.12); color: var(--accent); }
 .file-actions .ren-btn { color: var(--rename); }
-.file-actions .ren-btn:hover { background: rgba(212,144,58,.12); }
+.file-actions .ren-btn:hover { background: var(--rename-bg); }
 .file-actions .del-btn { color: var(--danger); }
-.file-actions .del-btn:hover { background: rgba(224,82,82,.12); }
+.file-actions .del-btn:hover { background: var(--danger-bg); }
 
 /* Drag handle — four braille dots, always occupies space, only visible on hover */
 .drag-handle {
@@ -736,7 +859,7 @@ main#file-list {
 }
 .drag-handle:hover {
   color: var(--text) !important;
-  background: rgba(255,255,255,.07);
+  background: var(--hover-1);
   cursor: grab;
 }
 .drag-handle:active { cursor: grabbing; }
@@ -749,7 +872,7 @@ main#file-list {
 
 /* Folder row being hovered over as a valid drop target */
 .file-row.drop-target {
-  background: rgba(79,127,255,.10);
+  background: var(--accent-faint);
   outline: 1.5px dashed var(--accent);
   outline-offset: -2px;
   border-radius: var(--radius);
@@ -769,7 +892,7 @@ main#file-list {
 #drop-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(79,127,255,.06);
+  background: var(--accent-fainter);
   border: 2px dashed var(--accent);
   z-index: 100;
   display: flex;
@@ -794,7 +917,7 @@ main#file-list {
   align-items: center;
   gap: 14px;
   min-width: 240px;
-  box-shadow: 0 4px 24px rgba(0,0,0,.5);
+  box-shadow: 0 4px 24px var(--shadow);
   z-index: 50;
 }
 #upload-progress {
@@ -818,7 +941,7 @@ main#file-list {
 #modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0,0,0,.7);
+  background: var(--scrim);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -859,7 +982,7 @@ main#file-list {
 .modal-btns button:last-child {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
 }
 .modal-btns button:hover { opacity: .82; }
 
@@ -991,7 +1114,7 @@ main#file-list {
   transition: background .1s;
 }
 .mini-row:last-child { border-bottom: none; }
-.mini-row:hover { background: rgba(255,255,255,.025); }
+.mini-row:hover { background: var(--hover-3); }
 .mini-row-main { flex: 1; min-width: 0; }
 .mini-row-title { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mini-row-sub {
@@ -1049,7 +1172,7 @@ main#file-list {
   background: var(--accent);
   border: none;
   border-radius: var(--radius);
-  color: #fff;
+  color: var(--on-accent);
   cursor: pointer;
   font-size: 13px;
   height: 32px;
@@ -1085,7 +1208,7 @@ main#file-list {
 }
 .data-table tr:last-child td { border-bottom: none; }
 .data-table tr.expandable { cursor: pointer; }
-.data-table tr.expandable:hover td { background: rgba(255,255,255,.018); }
+.data-table tr.expandable:hover td { background: var(--hover-4); }
 
 .td-inner { padding: 10px 12px; display: flex; align-items: center; gap: 8px; }
 .td-mono  { font-family: var(--mono); font-size: 12px; color: var(--muted); }
@@ -1093,7 +1216,7 @@ main#file-list {
 /* expand panel */
 .expand-row td { padding: 0; border-bottom: 1px solid var(--border); }
 .expand-panel {
-  background: rgba(255,255,255,.012);
+  background: var(--hover-5);
   border-top: 1px solid var(--border);
   padding: 16px 20px;
   display: grid;
@@ -1131,7 +1254,7 @@ main#file-list {
   transition: border-color .15s, color .15s, background .15s;
 }
 .status-action-btn:hover { border-color: var(--muted); color: var(--text); }
-.status-action-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.status-action-btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .status-action-btn.primary:hover { background: var(--accent-h); }
 .status-action-btn.danger-btn:hover { border-color: var(--danger); color: var(--danger); }
 
@@ -1221,7 +1344,7 @@ main#file-list {
   .nav-tab         { font-size: 11px; padding: 5px 9px; }
   #nav-wordmark    { font-size: 12px; letter-spacing: 3px; }
 }
-}
+
 @media (max-width: 520px) {
   #nav-wordmark { display: none; }
   :root { --nav-h: 72px; }
@@ -1266,8 +1389,8 @@ main#file-list {
 .rules-group-sub code {
   font-family: var(--mono);
   font-size: 11px;
-  color: #7da4d8;
-  background: rgba(125,164,216,.1);
+  color: var(--link);
+  background: var(--link-bg);
   padding: 1px 5px;
   border-radius: 3px;
 }

@@ -4,6 +4,23 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>HomeNAS</title>
+  <script>
+    // Runs before first paint, and deliberately not from app.js — that loads at
+    // the end of <body>, by which point the dark default has already painted
+    // and a light-theme user sees a dark flash on every page load.
+    // localStorage access is wrapped: it throws, rather than returning null,
+    // when site data is blocked (private windows, strict cookie settings).
+    (function () {
+      var theme = 'dark';
+      try {
+        theme = localStorage.getItem('nas_theme')
+          || (window.matchMedia
+              && window.matchMedia('(prefers-color-scheme: light)').matches
+                ? 'light' : 'dark');
+      } catch (e) { /* storage blocked — fall back to the dark default */ }
+      document.documentElement.setAttribute('data-theme', theme);
+    })();
+  </script>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -40,10 +57,16 @@
           <div id="nav-wordmark">HOME NAS</div>
         </div>
 
-        <!-- Right pill: Rules, Logs -->
-        <div id="nav-tabs-right" class="nav-pill">
-          <button class="nav-tab" data-tab="rules">&#9881; Rules</button>
-          <button class="nav-tab" data-tab="logs">&#9783; Logs</button>
+        <!-- Right: theme toggle, then pill with Rules, Logs -->
+        <div id="nav-right-group">
+          <button id="theme-toggle" type="button"
+                  title="Switch to light theme" aria-label="Switch to light theme">
+            <span class="theme-icon">&#9728;</span>
+          </button>
+          <div id="nav-tabs-right" class="nav-pill">
+            <button class="nav-tab" data-tab="rules">&#9881; Rules</button>
+            <button class="nav-tab" data-tab="logs">&#9783; Logs</button>
+          </div>
         </div>
       </div>
     </nav>
