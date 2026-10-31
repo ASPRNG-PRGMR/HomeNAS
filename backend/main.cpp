@@ -9,6 +9,7 @@
 #include "services/AlertWriter.h"
 #include "services/EventAnalyzer.h"
 #include "services/SyncManager.h"
+#include <filesystem>
 
 int main() {
     auto &app = drogon::app();
@@ -41,17 +42,24 @@ int main() {
         // simply to keep the audit-trail subsystem's init block together.
         std::string nasRoot = cfg.get(
             "nas_root", "/home/noobiegg/nas/nas_storage").asString();
-        int hashIntervalSeconds = cfg["sync"].get(
+
+        SyncManager::Config syncCfg;
+        syncCfg.nasRoot    = nasRoot;
+        syncCfg.backupRoot = cfg["sync"].get(
+            "backup_root", "").asString();
+        // sync.db lives beside events.db/alerts.db under .nas-meta, so the
+        // whole audit/operational trail is in one place.
+        syncCfg.dbPath = (std::filesystem::path(nasRoot) / ".nas-meta" / "sync.db").string();
+        syncCfg.hashIntervalSeconds = cfg["sync"].get(
             "hash_check_interval_seconds", 300).asInt();
-        int portRotationIntervalSeconds = cfg["sync"].get(
-            "port_rotation_interval_seconds", 86400).asInt();
-        // Stopgap portal listener directory — see SyncManager's class doc
-        // comment. Empty/missing disables the listener spawn entirely.
-        std::string syncPortalDir = cfg["sync"].get(
-            "portal_dir", "/home/noobiegg/nas/nas_main/sync-portal").asString();
-        SyncManager::instance().init(
-            nasRoot, hashIntervalSeconds, portRotationIntervalSeconds,
-            syncPortalDir);
+        syncCfg.scheduleCron = cfg["sync"].get(
+            "schedule_cron", "").asString();
+        // Defaults false: the backup is a safety net, not a mirror. Opting
+        // in means a wipe of nas_storage propagates into the backup on the
+        // next run, which is exactly what the default is there to prevent.
+        syncCfg.deleteFromBackup = cfg["sync"].get(
+            "delete_from_backup", false).asBool();
+        SyncManager::instance().init(syncCfg);
     });
 
     auto gracefulShutdown = []() {

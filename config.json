@@ -27,9 +27,12 @@
       "::1"
     ],
     "sync": {
+      "backup_root": "home_path/nas/nas_backup",
       "hash_check_interval_seconds": 300,
-      "port_rotation_interval_seconds": 86400,
-      "portal_dir": "home_path/nas/nas_main/sync-portal"
+      "schedule_cron": "0 3 * * *",
+      "delete_from_backup": false,
+      "telegram_bot_token": "",
+      "telegram_chat_id": ""
     }
   }
 }

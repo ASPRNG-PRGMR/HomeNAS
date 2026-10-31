@@ -7,6 +7,10 @@ set -euo pipefail
 _USER="${SUDO_USER:-$USER}"
 _HOME="$(eval echo "~$_USER")"
 NAS_ROOT="$_HOME/nas/nas_storage"
+# One-way backup target for the sync engine. Must live outside NAS_ROOT —
+# SyncManager refuses to run if it is nested inside, since it would copy its
+# own output back into itself on every pass.
+BACKUP_ROOT="$_HOME/nas/nas_backup"
 INSTALL_DIR="$_HOME/nas/nas_main"
 NAS_USER="$_USER"
 
@@ -58,6 +62,7 @@ id -u "$NAS_USER" &>/dev/null || \
 
 echo "==> Creating directories"
 mkdir -p "$NAS_ROOT"
+mkdir -p "$BACKUP_ROOT"
 mkdir -p "$INSTALL_DIR"/{webui,sync-portal,logs,tmp_uploads}
 
 
@@ -91,11 +96,12 @@ cp config.json "$INSTALL_DIR"
 echo "==> Deploying Web UI"
 cp -r webui/* "$INSTALL_DIR/webui/"
 
-echo "==> Deploying sync portal (standalone, served on the daily-rotating port)"
+echo "==> Deploying sync portal (served by NGINX at /sync/)"
 cp -r sync-portal/* "$INSTALL_DIR/sync-portal/"
 
 echo "==> Setting ownership"
 chown -R "$NAS_USER":"$NAS_USER" "$NAS_ROOT"
+chown -R "$NAS_USER":"$NAS_USER" "$BACKUP_ROOT"
 chown -R "$NAS_USER":"$NAS_USER" "$INSTALL_DIR"
 
 echo "==> Setting SELinux contexts"
@@ -108,10 +114,8 @@ semanage fcontext -a -t httpd_sys_content_t "$INSTALL_DIR/webui(/.*)?" || \
 semanage fcontext -m -t httpd_sys_content_t "$INSTALL_DIR/webui(/.*)?"
 restorecon -Rv "$INSTALL_DIR/webui"
 
-# Label the sync-portal directory the same way — it's also static content,
-# served by whatever process ends up listening on the daily-rotating sync
-# port (not yet automated — see README "Storage sync" section). Labeling it
-# now means no SELinux surprise later when that listener is added.
+# Label the sync-portal directory the same way — NGINX serves it at /sync/
+# on the main domain, so it needs the same read access as webui/.
 semanage fcontext -a -t httpd_sys_content_t "$INSTALL_DIR/sync-portal(/.*)?" || \
 semanage fcontext -m -t httpd_sys_content_t "$INSTALL_DIR/sync-portal(/.*)?"
 restorecon -Rv "$INSTALL_DIR/sync-portal"
@@ -126,9 +130,11 @@ semanage fcontext -a -t bin_t "$INSTALL_DIR/nas_backend" || \
 semanage fcontext -m -t bin_t "$INSTALL_DIR/nas_backend"
 restorecon -v "$INSTALL_DIR/nas_backend"
 
-# Label nas_root so the backend can read/write it
+# Label nas_root and the backup target so the backend can read/write them
 semanage fcontext -a -t var_t "$NAS_ROOT(/.*)?" || true
 restorecon -Rv "$NAS_ROOT"
+semanage fcontext -a -t var_t "$BACKUP_ROOT(/.*)?" || true
+restorecon -Rv "$BACKUP_ROOT"
 
 echo "==> Generating self-signed TLS certificate"
 mkdir -p /etc/ssl/nas
@@ -166,11 +172,8 @@ systemctl enable --now nginx
 echo "==> Opening firewall ports"
 firewall-cmd --permanent --add-service=https
 firewall-cmd --permanent --add-service=http
-# Sync portal listener (stopgap) binds somewhere in this range, rotating
-# daily — see SyncManager::maybeRotatePort(). Opened as a range rather than
-# a single port since the exact port isn't known until first rotation, and
-# changes every day after that.
-firewall-cmd --permanent --add-port=49152-65535/tcp
+# No extra ports: the sync portal is served by NGINX at /sync/ over 443,
+# replacing the stopgap listener's daily-rotating port (devlog Phase 3.2).
 firewall-cmd --reload
 
 echo "==> Enabling Tailscale"

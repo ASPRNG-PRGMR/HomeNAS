@@ -29,4 +29,10 @@ add_executable(
     services/SyncManager.cpp
 )
 
-target_link_libraries(nas_backend PRIVATE Drogon::Drogon)
+# OpenSSL is linked explicitly, unlike SQLite3 above. Drogon pulls it in for
+# TLS, but services/SyncManager.cpp calls EVP_* directly for the SHA-256
+# fallback in needsCopy(), and relying on a transitive dependency for symbols
+# we use ourselves breaks against a Drogon built without TLS.
+find_package(OpenSSL REQUIRED)
+
+target_link_libraries(nas_backend PRIVATE Drogon::Drogon OpenSSL::Crypto)

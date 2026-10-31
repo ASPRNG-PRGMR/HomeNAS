@@ -68,7 +68,7 @@ HomeNAS/
 │   │   ├── AlertWriter.h/cpp           — alert persistence and DB migration management
 │   │   ├── EventAnalyzer.h/cpp         — 17 detection rules, post-flush analysis
 │   │   ├── SyncTypes.h                 — SyncState enum, SyncStatus, SyncLogEntry
-│   │   └── SyncManager.h/cpp           — background hashing + port rotation + stopgap listener
+│   │   └── SyncManager.h/cpp           — background hashing + one-way backup engine
 │   ├── db/
 │   │   ├── schema_events.sql           — events table reference schema
 │   │   └── schema_alerts.sql           — alerts table and migration reference
@@ -177,16 +177,27 @@ A sync status icon sits bottom-left, above the sign-out button. It reflects one 
 
 **Hash verification** is real: `SyncManager` periodically walks `nas_storage` and computes an aggregate integrity hash. If the hash changes between checks while no sync was running, the state flips to hash-mismatch — the one state the backend can enter on its own, without a sync engine reporting anything.
 
-**What's mocked:** the sync engine itself. Progress/ETA are simulated by `SyncManager` advancing a percentage on a timer.
+**What sync does (implemented in Phase 3.3):** one-way backup of `nas_storage` to `backup_root`. The engine walks both trees and copies new and changed files. Change detection uses size + mtime as a fast path and falls back to SHA-256 when sizes match but mtimes differ, so a touched-but-unmodified file isn't re-copied.
 
-**What sync will actually do (decided in Phase 3.2):** one-way backup of `nas_storage` to a configured local path — typically a second drive. New and changed files are copied. Deletions in `nas_storage` are not automatically mirrored to the backup (`delete_from_backup: false` by default) — the backup is a safety net, not a mirror. Each run's outcome is persisted to `sync.db`. The sync portal moves from a separately-bound listener to NGINX-served static content under `/sync/` on the main domain, inheriting TLS and JWT auth. The stopgap `python3 -m http.server` listener and the daily port-rotation machinery are deleted in the next phase.
+Deletions in `nas_storage` are **not** mirrored to the backup by default (`delete_from_backup: false`) — the backup is a safety net, not a mirror, so a ransomware wipe of `nas_storage` leaves the backup intact through the next run. Setting it to `true` opts into mirroring.
+
+`backup_root` must live outside `nas_root`; `SyncManager` refuses to start the engine otherwise, since it would copy its own output back into itself on every pass.
+
+Each run's outcome (files scanned/copied/deleted, bytes, duration, errors) is persisted to `sync.db`, alongside the sync log — which is now durable rather than an in-memory ring buffer that was lost on restart, i.e. exactly when you most want to read back why a sync failed.
+
+Runs trigger manually from the dashboard or on `schedule_cron` (standard 5-field cron; `*`, `n`, `a-b`, `a,b,c` and `*/step` are supported, evaluated against local wall-clock time).
+
+The sync portal is served by NGINX as static content under `/sync/` on the main domain, inheriting its TLS. The stopgap `python3 -m http.server` listener and the daily port-rotation machinery are gone.
+
+**Notifications** are a seam, not an implementation: `SyncManager::notifyRunFinished()` is called once per finished run and currently does nothing. Telegram wiring is Phase 2.56.
 
 ### Data storage
 
 ```
 ~/nas/nas_storage/.nas-meta/
 ├── events.db    — append-only event log (never deleted)
-└── alerts.db    — alert log (status mutable, records never deleted)
+├── alerts.db    — alert log (status mutable, records never deleted)
+└── sync.db      — backup run history + durable sync log
 ```
 
 Both databases are hidden from the NAS file browser. Back them up separately if the audit trail matters independently of the file data.
@@ -229,14 +240,16 @@ All endpoints require `Authorization: Bearer <token>` except `/api/auth/login`.
 | GET | `/api/alerts/stats/summary` | Open counts by severity |
 | PATCH | `/api/alerts/:id/status` | Set status: `open`, `investigating`, or `dismissed` |
 
-### Sync (preview — see "Storage sync" above)
+### Sync — see "Storage sync" above
 | Method | Endpoint | Description |
 |---|---|---|
-| GET | `/api/sync/status` | State, percent/ETA (mocked), last verified hash, current rotating port |
-| GET | `/api/sync/logs?limit=` | Recent sync log entries (in-memory, not persisted to SQLite) |
-| POST | `/api/sync/start` | Mock: begins a simulated sync run |
-| POST | `/api/sync/pause` | Mock: pauses an in-progress simulated sync |
-| POST | `/api/sync/resume` | Mock: resumes a paused simulated sync |
+| GET | `/api/sync/status` | State, live progress, last verified hash, last/next run |
+| GET | `/api/sync/logs?limit=` | Recent sync log entries (persisted to `sync.db`) |
+| GET | `/api/sync/runs?limit=` | Finished run history, most recent first |
+| POST | `/api/sync/start` | Queues a backup run on the worker thread |
+| POST | `/api/sync/pause` | Pauses the in-progress run between files |
+| POST | `/api/sync/resume` | Resumes a paused run |
+| POST | `/api/sync/cancel` | Abandons the in-progress run (copied files stay copied) |
 
 ---
 
@@ -402,7 +415,7 @@ JWTs are stateless — logout is client-side only. To invalidate all active sess
 
 ## Roadmap
 
-- **Storage Sync — real engine (next):** architecture decided in Phase 3.2 — one-way backup of `nas_storage` to a configured local path. Deletes the stopgap listener and port rotation, adds `sync.db` for run persistence, wires Telegram notifications, moves the portal to NGINX. See devlog Phase 3.2 for full decision record.
+- **Telegram notifications (next):** `SyncManager::notifyRunFinished()` is the seam, called on every finished run. Phase 2.56 wires it to `sync.complete` / `sync.error`. Config keys (`telegram_bot_token`, `telegram_chat_id`) already exist and are inert.
 - **Phase 2.55 — SOAR:** Manual response actions from the dashboard: block IP, invalidate sessions, disable user account.
 - **Phase 2.56 — Notifications:** Telegram alerts on high/critical severity triggers and sync completion/failure. Bot token and chat ID configurable in `config.json`.
 - **Phase 3 — Storage Intelligence:** Duplicate detection, stale file identification, storage usage trends.

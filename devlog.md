@@ -670,3 +670,50 @@ Each run's outcome (files copied, bytes transferred, duration, errors) is persis
 ### Files modified in Phase 3.2
 
 `webui/index.html` — added PT-001, PT-002, DX-001, DX-002, DX-003 to the `af-rule` filter dropdown in the Alerts tab.
+
+---
+
+## Phase 3.3 — Sync engine implementation
+
+Executes the architecture decided in Phase 3.2. Implementation order followed the plan; step 4 (Telegram) is deliberately left as a seam.
+
+### Step 1 — Stopgap machinery deleted
+
+Removed from `SyncManager`: `startPortalListener()`, `stopPortalListener()`, `checkPortalListener()`, `rotatePort()`/`maybeRotatePort()`, `portalListenerPid_`, `portRotationIntervalSeconds_`, and the `portal_dir` config plumbing through `main.cpp`. `startMockSync()`/`advanceMockSync()`/`pauseMockSync()`/`resumeMockSync()` are replaced by `requestSync()`/`pauseSync()`/`resumeSync()`/`cancelSync()`.
+
+`SyncStatus` lost `currentPort`/`portRotatedAtUtc` and gained live run counters plus a last-run summary. `setup.sh` no longer opens the 49152-65535 firewall range.
+
+### Step 2 — `sync.db`
+
+Two tables, same WAL pattern as `events.db`: `sync_runs` (one row per finished run) and `sync_log` (replaces the in-memory `std::deque<SyncLogEntry>`). The deque was lost on every restart — precisely when you most want to read back why sync failed. `sync_log` is trimmed to 2000 rows on insert.
+
+Unlike `EventWriter`, DB access is guarded by a plain mutex rather than a producer queue. `EventWriter` needs the queue because it's written from request hot paths; sync writes a handful of rows per run.
+
+### Step 3 — Copy engine
+
+`performRun()` scans `nas_storage` up front (so percent/ETA have a real denominator from the first file), then copies. `.nas-meta` is excluded — backing up a live WAL database by file copy produces a corrupt snapshot anyway.
+
+Change detection (`needsCopy()`): size mismatch copies immediately; size and mtime both equal skips; **same size, different mtime falls back to SHA-256** rather than copying. A touch, a restore, or an edit that preserved length are indistinguishable by stat alone, and copying on mtime alone would re-copy the whole tree after any `touch -r`-style operation. After each copy the destination's mtime is set to the source's, so the next run's fast path recognises it.
+
+Two safety properties, both covered by tests:
+
+- **`backup_root` nested inside `nas_root` is refused at init.** It would copy its own output back into itself every pass, growing until the disk fills.
+- **Deletions are not mirrored unless `delete_from_backup: true`.** When enabled, orphans are collected before any removal — deleting while a `recursive_directory_iterator` walks the same tree is UB.
+
+Pause is checked between files, so a pause during a large file takes effect after it completes rather than leaving a half-written destination. Cancel leaves already-copied files in place: the backup is additive, so a partial run is still a valid, if incomplete, backup.
+
+`schedule_cron` replaces the hardcoded 24h interval. The matcher supports `*`, `n`, `a-b`, `a,b,c` and `*/step`, with standard cron's quirk that a restricted day-of-month *and* day-of-week match if **either** does. Evaluated against local wall-clock time, guarded to one fire per minute.
+
+### Step 5 — Portal via NGINX
+
+`location /sync/` serves `sync-portal/` from the main domain, inheriting its TLS. The webui's sync button opens `/sync/` instead of looking up a rotating port, which also removes the forced `http://` workaround from Phase 3.1.
+
+Note this means the portal's static files are served by NGINX and never pass through `JwtFilter` — same exposure the dashboard's `index.html` already has. The data behind it still comes from authenticated `/api/sync/*`.
+
+### Testing
+
+32 checks against a scratch tree: initial copy, no-op re-run, single-file edit, SHA-256 fallback on mtime-only change, `.nas-meta` exclusion, deletion non-mirroring (and mirroring when opted in), run/log persistence, the nested-`backup_root` refusal, and 14 cron expressions.
+
+### Files added/modified in Phase 3.3
+
+`backend/services/SyncTypes.h`, `backend/services/SyncManager.h/cpp`, `backend/controllers/SyncController.h/cpp`, `backend/main.cpp`, `backend/CMakeLists.txt` (explicit `OpenSSL::Crypto` — `needsCopy()` calls `EVP_*` directly, and relying on Drogon's transitive link breaks against a Drogon built without TLS), `config.json`, `nginx/nas.conf`, `setup.sh`, `webui/app.js`, `README.md`.

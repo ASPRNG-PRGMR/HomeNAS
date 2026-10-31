@@ -1174,9 +1174,12 @@ async function updateSyncIcon() {
   lastSyncState = data.state;
 
   if (data.state === 'syncing') {
-    const etaMin = Math.ceil(data.eta_seconds / 60);
+    // ETA is only meaningful once the engine has timed a few files; it
+    // reports 0 until then rather than guessing, so don't render "~0m".
+    const eta = data.eta_seconds > 0
+      ? ` — ~${Math.ceil(data.eta_seconds / 60)}m remaining` : '';
     btn.setAttribute('data-tip',
-      `Syncing — ${data.percent_complete}% — ~${etaMin}m remaining`);
+      `Syncing — ${data.percent_complete}% — ${data.files_copied} copied${eta}`);
   } else if (data.state === 'paused') {
     btn.setAttribute('data-tip', `Sync paused — ${data.percent_complete}% complete`);
   } else if (data.state === 'error') {
@@ -1185,7 +1188,10 @@ async function updateSyncIcon() {
     btn.setAttribute('data-tip', 'Storage hash mismatch — click to see logs');
   } else {
     const checked = data.last_hash_check_utc ? relTime(data.last_hash_check_utc) : '—';
-    btn.setAttribute('data-tip', `Idle — hash verified ${checked}`);
+    const last = data.last_run_utc
+      ? ` — last backup ${relTime(data.last_run_utc)} (${data.last_run_files_copied} copied)`
+      : ' — no backup run yet';
+    btn.setAttribute('data-tip', `Idle — hash verified ${checked}${last}`);
   }
 }
 
@@ -1194,25 +1200,13 @@ document.getElementById('sync-btn').addEventListener('click', async () => {
     openSyncLogsPanel();
     return;
   }
-  // Normal operation (idle/syncing/paused) — open the standalone sync
-  // landing page, served on the daily-rotating port. The port is read
-  // fresh on every click rather than cached, since it can rotate at any
-  // time and a stale port would silently 404.
-  //
-  // Forced http:// rather than reusing location.protocol: the main
-  // dashboard is served over https (NGINX terminates TLS), but the
-  // stopgap portal listener (python3 -m http.server — see SyncManager)
-  // speaks plain HTTP with no TLS at all. Reusing https here sends a TLS
-  // ClientHello at a plaintext server, which the browser reports as
-  // SSL_ERROR_RX_RECORD_TOO_LONG rather than a clear "wrong protocol"
-  // message. This is specific to the stopgap; once a real sync engine
-  // exists and (if) it terminates TLS itself, this should switch back to
-  // matching the main page's protocol or to whatever scheme the real
-  // service requires.
-  const data = await get('/api/sync/status').catch(() => null);
-  if (!data || !data.current_port) return;
-  const url = `http://${location.hostname}:${data.current_port}/`;
-  window.open(url, '_blank');
+  // Normal operation (idle/syncing/paused) — open the sync portal. NGINX
+  // serves it from /sync/ on this same origin, so it inherits the
+  // dashboard's TLS and needs no port lookup. This replaces the stopgap
+  // listener's daily-rotating plaintext port, which is why the scheme is no
+  // longer forced to http:// — a same-origin relative path can't get the
+  // protocol wrong.
+  window.open('/sync/', '_blank');
 });
 
 async function openSyncLogsPanel() {

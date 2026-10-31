@@ -1,10 +1,9 @@
 #pragma once
 #include <drogon/HttpController.h>
 
-// Sync status, logs, and mock control endpoints. Behind JwtFilter like every
-// other controller — sync state (and especially the rotating port, even
-// though it's not yet consumed by a real external service) is operational
-// data that shouldn't be exposed unauthenticated, same reasoning as
+// Sync status, logs, run history, and control endpoints. Behind JwtFilter
+// like every other controller — sync state is operational data that
+// shouldn't be exposed unauthenticated, same reasoning as
 // EventsController/AlertsController.
 class SyncController : public drogon::HttpController<SyncController> {
 public:
@@ -14,9 +13,11 @@ public:
         ADD_METHOD_TO(SyncController::start,  "/api/sync/start",  drogon::Post, "JwtFilter");
         ADD_METHOD_TO(SyncController::pause,  "/api/sync/pause",  drogon::Post, "JwtFilter");
         ADD_METHOD_TO(SyncController::resume, "/api/sync/resume", drogon::Post, "JwtFilter");
+        ADD_METHOD_TO(SyncController::cancel, "/api/sync/cancel", drogon::Post, "JwtFilter");
+        ADD_METHOD_TO(SyncController::runs,   "/api/sync/runs",   drogon::Get,  "JwtFilter");
     METHOD_LIST_END
 
-    // GET /api/sync/status — state, percent/eta (mocked), hash, current port
+    // GET /api/sync/status — state, live progress, hash, last/next run
     void status(const drogon::HttpRequestPtr &req,
                 std::function<void(const drogon::HttpResponsePtr &)> &&callback);
 
@@ -24,15 +25,25 @@ public:
     void logs(const drogon::HttpRequestPtr &req,
               std::function<void(const drogon::HttpResponsePtr &)> &&callback);
 
-    // POST /api/sync/start — mock: begins a simulated sync run
+    // POST /api/sync/start — queues a backup run on the worker thread
     void start(const drogon::HttpRequestPtr &req,
                std::function<void(const drogon::HttpResponsePtr &)> &&callback);
 
-    // POST /api/sync/pause — mock: pauses an in-progress simulated sync
+    // POST /api/sync/pause — pauses the in-progress run between files
     void pause(const drogon::HttpRequestPtr &req,
                std::function<void(const drogon::HttpResponsePtr &)> &&callback);
 
-    // POST /api/sync/resume — mock: resumes a paused simulated sync
+    // POST /api/sync/resume — resumes a paused run
     void resume(const drogon::HttpRequestPtr &req,
                 std::function<void(const drogon::HttpResponsePtr &)> &&callback);
+
+    // POST /api/sync/cancel — abandons the in-progress run; files already
+    // copied stay copied (the backup is additive, so a partial run is still
+    // a valid, if incomplete, backup)
+    void cancel(const drogon::HttpRequestPtr &req,
+                std::function<void(const drogon::HttpResponsePtr &)> &&callback);
+
+    // GET /api/sync/runs?limit= — finished run history, most recent first
+    void runs(const drogon::HttpRequestPtr &req,
+              std::function<void(const drogon::HttpResponsePtr &)> &&callback);
 };
