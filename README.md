@@ -266,10 +266,26 @@ All endpoints require `Authorization: Bearer <token>` except `/api/auth/login`.
 ```bash
 git clone https://github.com/ASPRNG-PRGMR/HomeNAS.git
 cd HomeNAS
-sudo bash setup.sh
+sudo bash setup.sh --install      # --install is the default; bare `setup.sh` still works
 ```
 
-`setup.sh` installs all dependencies (including `sqlite-devel`), builds Drogon from source if not present, compiles the backend, deploys the web UI, configures NGINX, generates a self-signed TLS certificate, installs the systemd service, and starts everything.
+`setup.sh --install` installs all dependencies (including `sqlite-devel`), builds Drogon from source if not present, compiles the backend, deploys the web UI, configures NGINX, generates a self-signed TLS certificate, registers `nas.local` in `/etc/hosts`, installs the systemd service, and starts everything.
+
+### Uninstall
+
+```bash
+sudo bash setup.sh --uninstall
+```
+
+Reverses the install in the opposite order: stops and removes the systemd unit, removes the NGINX config and reloads NGINX (only if it's running and its config is still valid), closes the firewall ports, strips the `nas.local` entry from `/etc/hosts`, deletes the TLS certificate, removes the SELinux file-context rules and reverts the `httpd_can_network_*` booleans, deletes `~/nas/nas_main`, narrows the home-directory permissions the installer widened, and removes Drogon from `/usr/local` along with `/tmp/drogon` and `backend/build`.
+
+Drogon is removed from the install manifest recorded at install time (`/usr/local/share/homenas/`), so only files this installer actually added are deleted. If no manifest is present — a pre-existing Drogon, or one put there by an older `setup.sh` — it's left alone and the paths are printed for you to remove by hand.
+
+**Your stored files are kept:** `~/nas/nas_storage` (including `.nas-meta/` with `events.db`, `alerts.db` and `sync.db`) and `~/nas/nas_backup`. Delete those directories yourself if you want the data gone too.
+
+Packages installed via `dnf`, and the `nginx` / `tailscaled` services themselves, are not removed — they're shared system components the installer can't prove it owns. Every step is best-effort, so a partial or already-partly-removed install still uninstalls cleanly.
+
+`sudo bash setup.sh --help` prints the available flags.
 
 ### Required manual steps after setup
 

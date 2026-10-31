@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
-# setup.sh — NAS stack installer for Fedora 43
-# Run as root: sudo bash setup.sh
+# setup.sh — NAS stack installer/uninstaller for Fedora 43
+#
+#   sudo bash setup.sh --install      (default if no flag is given)
+#   sudo bash setup.sh --uninstall
+#   bash setup.sh --help
+#
+# The uninstaller removes everything the installer puts on the system and
+# leaves your stored files alone — see do_uninstall() for exactly what is
+# kept and why.
 
 set -euo pipefail
 
@@ -13,6 +20,47 @@ NAS_ROOT="$_HOME/nas/nas_storage"
 BACKUP_ROOT="$_HOME/nas/nas_backup"
 INSTALL_DIR="$_HOME/nas/nas_main"
 NAS_USER="$_USER"
+
+# Small state directory outside the install tree. It holds the record of what
+# we installed into /usr/local (Drogon's install manifest), which the
+# uninstaller needs *after* it has deleted INSTALL_DIR — and which would
+# otherwise only exist in /tmp, i.e. gone after a reboot.
+STATE_DIR="/usr/local/share/homenas"
+DROGON_MANIFEST="$STATE_DIR/drogon-install-manifest.txt"
+
+# Best-effort step. The uninstaller must keep going when a given piece was
+# never installed, or was already removed by hand — a half-finished install
+# still has to uninstall cleanly, and `set -e` would abort on the first
+# missing item.
+try() { "$@" 2>/dev/null || true; }
+
+require_root() {
+    if [ "$(id -u)" -ne 0 ]; then
+        echo "This must run as root:  sudo bash setup.sh ${1:-}" >&2
+        exit 1
+    fi
+}
+
+usage() {
+    cat <<USAGE
+setup.sh — HomeNAS installer/uninstaller
+
+  sudo bash setup.sh --install     Build and install the stack (default)
+  sudo bash setup.sh --uninstall   Remove everything this installer created
+  bash setup.sh --help             Show this message
+
+--uninstall deliberately keeps your stored files:
+  $NAS_ROOT
+  $BACKUP_ROOT
+Remove those by hand if you also want the data gone.
+USAGE
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  INSTALL
+# ─────────────────────────────────────────────────────────────────────────────
+do_install() {
+require_root --install
 
 echo "==> Installing dependencies"
 dnf install -y \
@@ -45,14 +93,29 @@ else
             https://github.com/drogonframework/drogon /tmp/drogon
     fi
 
+    # BUILD_EXAMPLES defaults to ON upstream, and `cmake --install` then drops
+    # a dozen demo binaries with very generic names (helloworld, client,
+    # benchmark, cors, file_upload, ...) straight into /usr/local/bin. We have
+    # no use for them and they're indistinguishable from someone else's tools
+    # once they're there.
     cmake -S /tmp/drogon -B /tmp/drogon/build \
         -DCMAKE_BUILD_TYPE=Release \
         -GNinja \
-        -DBUILD_TESTING=OFF
+        -DBUILD_TESTING=OFF \
+        -DBUILD_EXAMPLES=OFF
 
     cmake --build /tmp/drogon/build -j"$(nproc)"
     cmake --install /tmp/drogon/build
     ldconfig
+
+    # Keep the manifest so --uninstall can remove exactly the files we added
+    # to /usr/local, rather than guessing at paths. Its presence also records
+    # that *we* installed Drogon: without it, --uninstall leaves a
+    # pre-existing Drogon alone.
+    mkdir -p "$STATE_DIR"
+    if [ -f /tmp/drogon/build/install_manifest.txt ]; then
+        cp /tmp/drogon/build/install_manifest.txt "$DROGON_MANIFEST"
+    fi
 fi
 
 
@@ -188,7 +251,7 @@ chmod o+rx $_HOME/nas
 chmod o+rx $_HOME/nas/nas_main
 chmod -R o+rX $_HOME/nas/nas_main/webui
 systemctl daemon-reload
-sudo systemctl reload nginx
+systemctl reload nginx
 systemctl restart nas-backend
 
 echo ""
@@ -220,3 +283,172 @@ echo " 4. On each *client* machine, add to its /etc/hosts:"
 echo "    <tailscale-ip>  nas.local"
 echo "    (or just use the Tailscale IP directly)"
 echo ""
+echo " To remove all of this again:  sudo bash setup.sh --uninstall"
+echo ""
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  UNINSTALL
+# ─────────────────────────────────────────────────────────────────────────────
+# Reverses do_install() in roughly the opposite order it ran, so nothing is
+# in use while it's being removed. Every step is best-effort (see try()):
+# uninstalling a partial or already-partly-removed install has to work.
+do_uninstall() {
+require_root --uninstall
+
+echo "==> Stopping and removing the systemd service"
+try systemctl stop nas-backend
+try systemctl disable nas-backend
+try rm -f /etc/systemd/system/nas-backend.service
+try systemctl daemon-reload
+try systemctl reset-failed nas-backend
+
+# Older installs forked a detached `python3 -m http.server` for the sync
+# portal that deliberately outlived the backend (devlog Phase 3.2). Nothing
+# spawns it any more, but an old one can still be running right now, and
+# stopping the unit would not have taken it with it.
+try pkill -f "http.server.*sync-portal"
+
+echo "==> Removing NGINX config"
+try rm -f /etc/nginx/conf.d/nas.conf
+# Only reload if nginx is actually up and still has a valid config — on a
+# machine where nginx serves other sites we must not leave it down, and on
+# one where it doesn't, there's nothing to reload.
+if systemctl is-active --quiet nginx; then
+    if nginx -t >/dev/null 2>&1; then
+        try systemctl reload nginx
+    else
+        echo "    NGINX config is invalid after removal — leaving it running;"
+        echo "    check 'nginx -t' yourself."
+    fi
+fi
+
+echo "==> Closing firewall ports"
+try firewall-cmd --permanent --remove-service=https
+try firewall-cmd --permanent --remove-service=http
+# Installs from before Phase 3.3 opened the whole dynamic range for the
+# rotating sync-portal port. Harmless if it was never added.
+try firewall-cmd --permanent --remove-port=49152-65535/tcp
+try firewall-cmd --reload
+
+echo "==> Removing nas.local from /etc/hosts"
+# Drops our marker comment and any nas.local mapping. Same word-boundary
+# match the installer uses, so an unrelated host like "my-nas.local.example"
+# is left alone.
+if [ -f /etc/hosts ]; then
+    try sed -i -e '/^# HomeNAS dashboard$/d' \
+               -e '/^[^#]*[[:space:]]nas\.local\([[:space:]]\|$\)/d' /etc/hosts
+    # The installer prepends a blank line as a separator; without this the
+    # file keeps growing a stray empty line at the end on every
+    # install/uninstall cycle. Only touches blank lines at EOF.
+    try sed -i -e :a -e '/^\n*$/{$d;N;};/\n$/ba' /etc/hosts
+fi
+
+echo "==> Removing TLS certificate"
+try rm -rf /etc/ssl/nas
+
+echo "==> Reverting SELinux configuration"
+try semanage fcontext -d "$INSTALL_DIR/webui(/.*)?"
+try semanage fcontext -d "$INSTALL_DIR/sync-portal(/.*)?"
+try semanage fcontext -d "$INSTALL_DIR/nas_backend"
+try semanage fcontext -d "$NAS_ROOT(/.*)?"
+try semanage fcontext -d "$BACKUP_ROOT(/.*)?"
+# These booleans are system-wide, not ours alone. Turning them back off is
+# the clean thing to do, but if you run another web app that proxies or makes
+# outbound connections, re-enable them with:
+#   sudo setsebool -P httpd_can_network_relay 1
+try setsebool -P httpd_can_network_relay 0
+try setsebool -P httpd_can_network_connect 0
+
+echo "==> Removing the install directory"
+try rm -rf "$INSTALL_DIR"
+
+# Kept directories were labelled var_t by the installer; now that the rules
+# are gone, put them back to whatever the default policy says they should be.
+if [ -d "$NAS_ROOT" ];    then try restorecon -R "$NAS_ROOT";    fi
+if [ -d "$BACKUP_ROOT" ]; then try restorecon -R "$BACKUP_ROOT"; fi
+
+echo "==> Reverting home directory permissions"
+# The installer widened these so NGINX could traverse down to webui/. Undo
+# that — it only ever loosened them, so tightening back is the safe
+# direction even if they happened to be set beforehand.
+try chmod o-x "$_HOME"
+if [ -d "$_HOME/nas" ]; then try chmod o-rx "$_HOME/nas"; fi
+
+echo "==> Removing Drogon from /usr/local"
+if [ -f "$DROGON_MANIFEST" ]; then
+    # Remove exactly what we installed, by manifest — never by glob.
+    while IFS= read -r f; do
+        if [ -n "$f" ]; then try rm -f "$f"; fi
+    done < "$DROGON_MANIFEST"
+    # Then the directories, which the manifest doesn't list. rmdir (not rm
+    # -rf) so anything else living in them survives.
+    for d in /usr/local/include/drogon /usr/local/include/trantor \
+             /usr/local/lib64/cmake/Drogon /usr/local/lib64/cmake/Trantor \
+             /usr/local/lib/cmake/Drogon /usr/local/lib/cmake/Trantor; do
+        try find "$d" -depth -type d -empty -delete
+    done
+    try ldconfig
+    echo "    Removed per install manifest."
+else
+    # No manifest means either Drogon predates this installer or it was
+    # installed by an older setup.sh. Leave it: deleting shared libraries we
+    # can't prove we own is how you break someone else's build.
+    echo "    No install manifest at $DROGON_MANIFEST — leaving Drogon in"
+    echo "    place. If this installer did put it there, remove by hand:"
+    echo "      /usr/local/{include/drogon,include/trantor}"
+    echo "      /usr/local/lib64/{libdrogon.a,libtrantor.a,cmake/Drogon,cmake/Trantor}"
+    echo "      /usr/local/bin/drogon_ctl"
+fi
+
+echo "==> Removing build trees and state"
+try rm -rf /tmp/drogon
+# Build output inside the repo checkout (gitignored, but still residue).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+try rm -rf "$SCRIPT_DIR/backend/build"
+try rm -rf "$STATE_DIR"
+
+echo ""
+echo "======================================================"
+echo " Uninstall complete."
+echo "======================================================"
+echo ""
+echo " Kept on purpose — your stored files:"
+echo "   $NAS_ROOT"
+echo "   $BACKUP_ROOT"
+echo "   (nas_storage/.nas-meta also holds events.db, alerts.db and"
+echo "    sync.db. Delete these two directories by hand if you want"
+echo "    the data gone too.)"
+echo ""
+echo " Not touched, because they are shared system components this"
+echo " installer cannot prove it owns:"
+echo "   - Packages from dnf (nginx, tailscale, git, cmake, python3, ...)"
+echo "   - The nginx and tailscaled services themselves (only our config"
+echo "     was removed; nginx was reloaded if it was running)"
+echo ""
+echo " Note: the installer deleted /etc/nginx/conf.d/default.conf and"
+echo " cannot restore it. Fedora ships no such file by default, so this"
+echo " only matters if you had created one."
+echo ""
+echo " Your git checkout still has the installer's path substitutions"
+echo " (home_path -> $_HOME) in config.json and nginx/nas.conf."
+echo " Run 'git checkout -- config.json nginx/nas.conf' to revert them."
+echo ""
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  ENTRY POINT
+# ─────────────────────────────────────────────────────────────────────────────
+# No flag behaves as --install, so the documented `sudo bash setup.sh` from
+# earlier versions keeps working unchanged.
+case "${1:---install}" in
+    --install)   do_install ;;
+    --uninstall) do_uninstall ;;
+    --help|-h)   usage ;;
+    *)
+        echo "Unknown option: $1" >&2
+        echo >&2
+        usage >&2
+        exit 1
+        ;;
+esac
