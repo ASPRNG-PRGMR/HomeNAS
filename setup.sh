@@ -23,13 +23,23 @@ dnf install -y \
     python3
 
 echo "==> Installing Drogon"
-if [ -f /usr/local/lib/cmake/Drogon/DrogonConfig.cmake ]; then
+# Check lib64 as well as lib — on Fedora (and any multilib distro) CMake
+# installs to /usr/local/lib64, so a lib-only check never sees an existing
+# install and we'd needlessly rebuild Drogon on every run.
+if [ -f /usr/local/lib/cmake/Drogon/DrogonConfig.cmake ] || \
+   [ -f /usr/local/lib64/cmake/Drogon/DrogonConfig.cmake ]; then
     echo "Drogon already installed. Skipping..."
-elif [ -d /tmp/drogon ] && [ "$(ls -A /tmp/drogon 2>/dev/null)" ]; then
-    echo "/tmp/drogon already exists and is not empty. Skipping Drogon install..."
 else
-    git clone --depth=1 --recurse-submodules \
-        https://github.com/drogonframework/drogon /tmp/drogon
+    # Only clone if we don't already have a tree. A leftover /tmp/drogon used
+    # to mean "skip entirely", which silently left Drogon uninstalled and the
+    # backend build failing further down — resume the build/install instead.
+    if [ -d /tmp/drogon/.git ]; then
+        echo "Reusing existing /tmp/drogon clone..."
+    else
+        rm -rf /tmp/drogon
+        git clone --depth=1 --recurse-submodules \
+            https://github.com/drogonframework/drogon /tmp/drogon
+    fi
 
     cmake -S /tmp/drogon -B /tmp/drogon/build \
         -DCMAKE_BUILD_TYPE=Release \
@@ -76,7 +86,6 @@ if [ -f "$INSTALL_DIR/nas_backend" ]; then
     rm -f "$INSTALL_DIR/nas_backend"
 fi
 cp backend/build/nas_backend "$INSTALL_DIR"
-cp backend/build/nas_backend "$INSTALL_DIR"
 cp config.json "$INSTALL_DIR"
 
 echo "==> Deploying Web UI"
@@ -107,17 +116,46 @@ semanage fcontext -a -t httpd_sys_content_t "$INSTALL_DIR/sync-portal(/.*)?" || 
 semanage fcontext -m -t httpd_sys_content_t "$INSTALL_DIR/sync-portal(/.*)?"
 restorecon -Rv "$INSTALL_DIR/sync-portal"
 
+# Label the backend binary bin_t so systemd can exec it. The binary lives
+# under $HOME, so it otherwise inherits user_home_t, and init_t is denied
+# `execute` on that type — the unit then dies at step EXEC with
+# status=203/EXEC ("Permission denied") even though the file is mode 0755
+# and runs fine when launched by hand from a user shell. Done via semanage
+# (not chcon) so the label survives a filesystem relabel.
+semanage fcontext -a -t bin_t "$INSTALL_DIR/nas_backend" || \
+semanage fcontext -m -t bin_t "$INSTALL_DIR/nas_backend"
+restorecon -v "$INSTALL_DIR/nas_backend"
+
 # Label nas_root so the backend can read/write it
 semanage fcontext -a -t var_t "$NAS_ROOT(/.*)?" || true
 restorecon -Rv "$NAS_ROOT"
 
 echo "==> Generating self-signed TLS certificate"
 mkdir -p /etc/ssl/nas
+# subjectAltName is required, not optional: Chrome/Brave (and every current
+# browser) ignore the CN entirely and validate the hostname against SAN only.
+# A CN-only cert gets ERR_CERT_COMMON_NAME_INVALID even when the CN matches
+# exactly. Both nas.local and the loopback IPs are listed so connecting by
+# either name or address gives a plain "self-signed" warning rather than an
+# additional name-mismatch one.
 openssl req -x509 -nodes -newkey rsa:4096 -days 3650 \
     -keyout /etc/ssl/nas/key.pem \
     -out    /etc/ssl/nas/cert.pem \
-    -subj   "/CN=nas.local"
+    -subj   "/CN=nas.local" \
+    -addext "subjectAltName=DNS:nas.local,IP:127.0.0.1,IP:::1"
 chmod 600 /etc/ssl/nas/key.pem
+
+echo "==> Registering nas.local in /etc/hosts"
+# Makes https://nas.local work on this machine with no Tailscale and no DNS.
+# Matched on a word-boundary hostname rather than a plain substring so an
+# unrelated entry (e.g. "my-nas.local.example") can't be mistaken for ours,
+# and so re-running setup.sh doesn't append a duplicate line each time.
+if grep -qE '^[^#]*[[:space:]]nas\.local([[:space:]]|$)' /etc/hosts; then
+    echo "nas.local already present in /etc/hosts. Skipping..."
+else
+    printf '\n# HomeNAS dashboard\n127.0.0.1\tnas.local\n::1\t\tnas.local\n' >> /etc/hosts
+    echo "Added nas.local -> 127.0.0.1 / ::1"
+fi
 
 echo "==> Installing NGINX config"
 cp nginx/nas.conf /etc/nginx/conf.d/nas.conf
@@ -152,23 +190,30 @@ systemctl restart nas-backend
 
 echo ""
 echo "======================================================"
-echo " Done! Required manual steps:"
+echo " Done! The dashboard is now at:  https://nas.local"
 echo "======================================================"
+echo ""
+echo " Accept the self-signed certificate warning on first visit."
+echo " nas.local is already mapped to this machine in /etc/hosts,"
+echo " so no Tailscale and no DNS setup is needed for local access."
+echo ""
+echo " Required manual steps:"
 echo ""
 echo " 1. Edit $INSTALL_DIR/config.json"
 echo "    - Set jwt_secret  → a long random string"
 echo "    - Set admin_password → your chosen password"
+echo "    (Edit the deployed copy above, not the one in the repo —"
+echo "     the repo copy is version-controlled.)"
 echo ""
 echo " 2. Restart the backend:"
 echo "    sudo systemctl restart nas-backend"
 echo ""
+echo " Optional — access from other machines, via Tailscale:"
+echo ""
 echo " 3. Connect to Tailscale:"
 echo "    sudo tailscale up"
 echo ""
-echo " 4. On each client machine, add to /etc/hosts:"
+echo " 4. On each *client* machine, add to its /etc/hosts:"
 echo "    <tailscale-ip>  nas.local"
 echo "    (or just use the Tailscale IP directly)"
-echo ""
-echo " 5. Open https://nas.local in your browser."
-echo "    Accept the self-signed certificate warning."
 echo ""

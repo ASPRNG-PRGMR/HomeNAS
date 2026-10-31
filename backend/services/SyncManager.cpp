@@ -308,7 +308,6 @@ void SyncManager::checkPortalListener() {
                     + std::to_string(currentPort));
     startPortalListener(currentPort);
 }
-}
 
 void SyncManager::advanceMockSync() {
     bool completed = false;
