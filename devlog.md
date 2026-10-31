@@ -717,3 +717,38 @@ Note this means the portal's static files are served by NGINX and never pass thr
 ### Files added/modified in Phase 3.3
 
 `backend/services/SyncTypes.h`, `backend/services/SyncManager.h/cpp`, `backend/controllers/SyncController.h/cpp`, `backend/main.cpp`, `backend/CMakeLists.txt` (explicit `OpenSSL::Crypto` — `needsCopy()` calls `EVP_*` directly, and relying on Drogon's transitive link breaks against a Drogon built without TLS), `config.json`, `nginx/nas.conf`, `setup.sh`, `webui/app.js`, `README.md`.
+
+---
+
+## Phase 3.4 — Overview layout rework + module-scope init bug
+
+### Issue 1 — Overview ordering
+
+Recent Alerts and Live Activity occupied the first grid row, but in practice Recent Alerts is almost always empty and Live Activity is almost always full — so the two panels worth scanning (Top Source IPs, Top Actors) sat below the fold behind a long feed and an empty box.
+
+Offenders moved to row 1, Recent Alerts and Live Activity to row 2. `.overview-grid` also gained `align-items: start`, so the usually-empty alerts card no longer stretches to match its neighbour and render as a large void.
+
+### Issue 2 — Live Activity forcing page scroll
+
+The feed rendered every event it fetched, pushing the page past the viewport. It now renders only what fits, with the remainder behind a "Show more (n)" pill in the card header that opens a bounded, scrollable modal.
+
+A fixed row count can't work: the content above the feed is ~560px, so at a 900px viewport 4 rows fit and at 1080px it's 7. `feedRowsThatFit()` derives the count from the card's own position and the viewport, clamped to 3-12, remeasured on resize. Row height is read from a rendered row rather than hardcoded so it tracks `.mini-row`'s padding.
+
+Two ordering subtleties, both of which caused wrong counts before being fixed:
+
+- `renderOffenders()` must run **before** the feed renders. The offender panels are in the grid row above, so until they're populated the feed measures its own top against a still-short page and overestimates the space.
+- Recent Alerts is capped to the same count. It shares the grid row, so grid row height is the max of the two — leaving alerts uncapped would let an alert burst reintroduce the scroll that capping the feed was meant to remove.
+
+Events are fetched at `limit=50` (was 12) so "Show more" has a full list without a second round trip. Below roughly an 820px viewport the fixed content (8 stat cards + offenders) exceeds the viewport on its own and the page still scrolls slightly; the 3-row floor is preferred over a 1-row feed.
+
+### Issue 3 — `app.js` aborting on any authenticated page load
+
+`if (token) showApp();` sat at module scope on line 84. `showApp()` reaches `startPolling()` → `stopPolling()`, which touches `let pollTimer` — declared on line 456. Hitting a `let` in its temporal dead zone throws `ReferenceError: Cannot access 'pollTimer' before initialization`, and because the throw is at module scope it **aborts the rest of the script**: every `addEventListener` and every `const`/`let` below line 84 silently never initialised.
+
+This only fires when a session token already exists, i.e. refreshing the dashboard while signed in — a fresh load has no token, skips the call, and runs to completion, which is why it went unnoticed. Found because the new feed constants landed below the call site and showed up as a second TDZ error.
+
+The init call is now the last statement in the file.
+
+### Files modified in Phase 3.4
+
+`webui/index.html`, `webui/style.css`, `webui/app.js`.

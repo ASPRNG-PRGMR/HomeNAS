@@ -168,20 +168,12 @@
           </div>
         </div>
 
+        <!-- Offenders first: these are the panels you actually scan for, and
+             they're short and fixed-height. Recent Alerts and Live Activity
+             follow, since one is usually empty and the other is usually
+             long — putting them first pushed the useful summaries below the
+             fold. -->
         <div class="overview-grid">
-          <div class="dash-card">
-            <div class="dash-card-header">
-              <span class="dash-card-title">Recent Alerts</span>
-              <span style="font-size:11px;color:var(--muted)" id="overview-poll-indicator">
-                <span class="poll-dot"></span>live
-              </span>
-            </div>
-            <div class="dash-card-body" id="overview-recent-alerts"><div class="dash-loading">Loading</div></div>
-          </div>
-          <div class="dash-card">
-            <div class="dash-card-header"><span class="dash-card-title">Live Activity</span></div>
-            <div class="dash-card-body" id="overview-live-feed"><div class="dash-loading">Loading</div></div>
-          </div>
           <div class="dash-card">
             <div class="dash-card-header">
               <span class="dash-card-title">Top Source IPs</span>
@@ -195,6 +187,22 @@
               <span style="font-size:11px;color:var(--muted)">today</span>
             </div>
             <div class="dash-card-body" id="overview-top-actors"><div class="dash-loading">Loading</div></div>
+          </div>
+          <div class="dash-card">
+            <div class="dash-card-header">
+              <span class="dash-card-title">Recent Alerts</span>
+              <span style="font-size:11px;color:var(--muted)" id="overview-poll-indicator">
+                <span class="poll-dot"></span>live
+              </span>
+            </div>
+            <div class="dash-card-body" id="overview-recent-alerts"><div class="dash-loading">Loading</div></div>
+          </div>
+          <div class="dash-card">
+            <div class="dash-card-header">
+              <span class="dash-card-title">Live Activity</span>
+              <button id="feed-show-more" class="pill-btn hidden" type="button">Show more</button>
+            </div>
+            <div class="dash-card-body" id="overview-live-feed"><div class="dash-loading">Loading</div></div>
           </div>
         </div>
       </div>
@@ -467,6 +475,18 @@
     </div>
 
   </div><!-- end #auth-shell -->
+
+  <!-- Full live-activity feed. Separate overlay from #modal-overlay: that
+       one is sized for the rename prompt, this is a tall scrollable list. -->
+  <div id="feed-overlay" class="hidden">
+    <div class="feed-modal">
+      <div class="feed-modal-header">
+        <span class="dash-card-title">Live Activity</span>
+        <button id="feed-modal-close" type="button" title="Close" aria-label="Close">&#10005;</button>
+      </div>
+      <div class="feed-modal-body" id="feed-modal-body"></div>
+    </div>
+  </div>
 
   <!-- Rename modal -->
   <div id="modal-overlay" class="hidden">

@@ -80,9 +80,6 @@ function signOut() {
   document.getElementById('login-screen').classList.remove('hidden');
 }
 
-// ── init ──────────────────────────────────────────────────────────────────────
-if (token) showApp();
-
 function showApp() {
   document.getElementById('login-screen').classList.add('hidden');
   document.getElementById('auth-shell').classList.remove('hidden');
@@ -532,7 +529,10 @@ async function loadOverview() {
     get(`/api/events/stats/summary?group_by=actor&limit=5&from=${today}`),
     get(`/api/events/stats/summary?group_by=source_ip&limit=5&from=${today}`),
     get('/api/alerts?limit=8&status=open'),
-    get('/api/events?limit=12')
+    // Fetched well past what the card shows so "Show more" has a full list
+    // without a second round trip. Still a small response, and it's the same
+    // poll that was already running every 15s.
+    get('/api/events?limit=50')
   ]);
 
   // Severity cards
@@ -573,25 +573,26 @@ async function loadOverview() {
     };
   });
 
-  // Recent alerts panel
-  renderOverviewAlerts(recentAlerts?.items || []);
-
-  // Live feed panel
-  renderOverviewFeed(recentEvents?.items || []);
-
-  // Top IPs
+  // Offenders first, and not just for display order: they sit in the grid
+  // row *above* the feed, so until they're populated the feed card measures
+  // its own top against a page that's still short and overestimates how many
+  // rows fit. Filling them first makes that measurement final.
   renderOffenders('overview-top-ips', ipSummary?.items || [], 'source_ip');
-
-  // Top actors
   renderOffenders('overview-top-actors', actorSummary?.items || [], 'actor');
+
+  // Both row-2 panels are capped to what fits, so neither can push the page
+  // into scrolling. The full alert list is one click away in the Alerts tab.
+  const rows = feedRowsThatFit();
+  renderOverviewAlerts(recentAlerts?.items || [], rows);
+  renderOverviewFeed(recentEvents?.items || [], rows);
 }
 
-function renderOverviewAlerts(alerts) {
+function renderOverviewAlerts(alerts, maxRows) {
   const el = document.getElementById('overview-recent-alerts');
   if (!alerts.length) {
     el.innerHTML = `<div class="dash-empty">No open alerts</div>`; return;
   }
-  el.innerHTML = alerts.map(a => `
+  el.innerHTML = alerts.slice(0, maxRows || alerts.length).map(a => `
     <div class="mini-row" data-alert-id="${a.id}">
       <div>${sevPill(a.severity)}</div>
       <div class="mini-row-main">
@@ -610,15 +611,44 @@ function renderOverviewAlerts(alerts) {
   });
 }
 
-function renderOverviewFeed(events) {
-  const el = document.getElementById('overview-live-feed');
-  if (!events.length) {
-    el.innerHTML = `<div class="dash-empty">No recent events</div>`; return;
-  }
-  el.innerHTML = events.map(e => {
-    const isFailure = e.result === 'failure';
-    const dotCls    = isFailure ? 'failure' : 'success';
-    return `
+// The inline feed renders however many rows fit in the space left below it,
+// so the Overview never pushes the page into scrolling — the rest go behind
+// "Show more". A fixed count can't work here: at a 900px viewport only 4
+// rows fit, at 1000px it's 6.
+const FEED_ROWS_MIN = 3;
+const FEED_ROWS_MAX = 12;
+// Space below the card to leave clear — .dash-screen's 60px bottom padding
+// plus a little breathing room.
+const FEED_BOTTOM_GAP = 68;
+const FEED_ROW_H_FALLBACK = 55;
+
+// Measured from a real row once one exists, so this tracks .mini-row's
+// padding/line-heights instead of silently drifting from a hardcoded guess.
+let feedRowH = 0;
+
+// Full set from the last poll, so opening the modal doesn't re-fetch.
+let lastFeedEvents = [];
+
+function feedRowsThatFit() {
+  const body = document.getElementById('overview-live-feed');
+  const card = body?.closest('.dash-card');
+  if (!card) return FEED_ROWS_MIN;
+
+  // Everything above this card is fixed-height (stat cards, and the
+  // offender panels, which are capped at 5 rows by the API limit), so the
+  // card's own top doesn't move with the number of rows we render — no
+  // feedback loop between this measurement and its result.
+  const docTop  = card.getBoundingClientRect().top + window.scrollY;
+  const headerH = card.querySelector('.dash-card-header').offsetHeight;
+  const avail   = window.innerHeight - docTop - headerH - FEED_BOTTOM_GAP;
+
+  const rows = Math.floor(avail / (feedRowH || FEED_ROW_H_FALLBACK));
+  return Math.max(FEED_ROWS_MIN, Math.min(FEED_ROWS_MAX, rows));
+}
+
+function feedRowHtml(e) {
+  const dotCls = e.result === 'failure' ? 'failure' : 'success';
+  return `
       <div class="mini-row">
         <div class="live-dot ${dotCls}"></div>
         <div class="mini-row-main">
@@ -629,8 +659,78 @@ function renderOverviewFeed(events) {
         </div>
         <div class="mini-row-right">${relTime(e.timestamp_utc)}</div>
       </div>`;
-  }).join('');
 }
+
+function renderOverviewFeed(events, maxRows) {
+  const el      = document.getElementById('overview-live-feed');
+  const moreBtn = document.getElementById('feed-show-more');
+  lastFeedEvents = events;
+
+  if (!events.length) {
+    el.innerHTML = `<div class="dash-empty">No recent events</div>`;
+    moreBtn.classList.add('hidden');
+    return;
+  }
+
+  const shown = maxRows || feedRowsThatFit();
+  el.innerHTML = events.slice(0, shown).map(feedRowHtml).join('');
+
+  // Cache the real row height off the first render so later calls size
+  // against the actual CSS rather than the fallback constant.
+  const firstRow = el.querySelector('.mini-row');
+  if (firstRow) feedRowH = firstRow.getBoundingClientRect().height || feedRowH;
+
+  // Only offer "Show more" when there is actually more — otherwise the pill
+  // is a button that opens the same list you're already looking at.
+  const hidden = events.length - shown;
+  moreBtn.classList.toggle('hidden', hidden <= 0);
+  if (hidden > 0) moreBtn.textContent = `Show more (${hidden})`;
+
+  // Keep the open modal current with the poll rather than freezing it at
+  // whatever was on screen when it opened.
+  if (!document.getElementById('feed-overlay').classList.contains('hidden')) {
+    renderFeedModal();
+  }
+}
+
+function renderFeedModal() {
+  document.getElementById('feed-modal-body').innerHTML =
+    lastFeedEvents.length
+      ? lastFeedEvents.map(feedRowHtml).join('')
+      : `<div class="dash-empty">No recent events</div>`;
+}
+
+function openFeedModal() {
+  renderFeedModal();
+  document.getElementById('feed-overlay').classList.remove('hidden');
+}
+
+function closeFeedModal() {
+  document.getElementById('feed-overlay').classList.add('hidden');
+}
+
+document.getElementById('feed-show-more').addEventListener('click', openFeedModal);
+document.getElementById('feed-modal-close').addEventListener('click', closeFeedModal);
+// Click the backdrop to dismiss, but not a click that started inside the
+// panel — otherwise dragging to select text and releasing outside closes it.
+document.getElementById('feed-overlay').addEventListener('click', e => {
+  if (e.target.id === 'feed-overlay') closeFeedModal();
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeFeedModal();
+});
+
+// Re-fit the inline feed when the window changes size, so the "no page
+// scroll" property holds after a resize instead of only at load.
+let feedResizeTimer = null;
+window.addEventListener('resize', () => {
+  clearTimeout(feedResizeTimer);
+  feedResizeTimer = setTimeout(() => {
+    if (activeTab === 'overview' && lastFeedEvents.length) {
+      renderOverviewFeed(lastFeedEvents);
+    }
+  }, 150);
+});
 
 function renderOffenders(containerId, items, keyField) {
   const el  = document.getElementById(containerId);
@@ -1286,3 +1386,13 @@ function escHtml(s) {
     .replace(/>/g,'&gt;')
     .replace(/"/g,'&quot;');
 }
+
+// ── init ──────────────────────────────────────────────────────────────────────
+// Deliberately the last statement in the file. showApp() reaches
+// startPolling(), which touches `let pollTimer` — declared ~370 lines below
+// where this call used to sit. Running it there threw "Cannot access
+// 'pollTimer' before initialization" on any load that already had a session
+// token (i.e. every refresh while signed in), and because that throw is at
+// module scope it aborted the rest of app.js: every listener and `const`
+// below the call site silently never initialised.
+if (token) showApp();
