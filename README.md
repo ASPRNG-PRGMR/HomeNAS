@@ -271,6 +271,27 @@ sudo bash setup.sh --install      # --install is the default; bare `setup.sh` st
 
 `setup.sh --install` installs all dependencies (including `sqlite-devel`), builds Drogon from source if not present, compiles the backend, deploys the web UI, configures NGINX, generates a self-signed TLS certificate, registers `nas.local` in `/etc/hosts`, installs the systemd service, and starts everything.
 
+### Updating
+
+```bash
+git pull
+sudo bash setup.sh --update
+```
+
+Runs the same steps as `--install`, with every step that would clobber something you're expected to have edited switched to preserve mode:
+
+| Preserved | How |
+|---|---|
+| `~/nas/nas_main/config.json` | **Merged**, never overwritten. Keys the repo has gained are added; every value already in your file wins, including `jwt_secret`, `admin_password` and any key you added yourself. A `config.json.bak` is written only when something actually changed. |
+| `/etc/ssl/nas/*.pem` | Reused. Regenerating would invalidate the certificate exception you accepted in the browser. |
+| `~/nas/nas_storage`, `~/nas/nas_backup` | Untouched. Update also skips the recursive `chown`/`restorecon` of these, which buys nothing and can be slow on a large tree. |
+
+Replaced: the backend binary, `webui/`, `sync-portal/`, the NGINX config and the systemd unit. `webui/` and `sync-portal/` are cleared before copying, so a file deleted from the repo doesn't linger in the deployed copy.
+
+If your deployed `config.json` isn't valid JSON, the update stops and changes nothing rather than overwriting it — fix the file and re-run. Obsolete keys from older releases are left in place rather than pruned: the merge can't tell a key the repo dropped from one you added deliberately, and the backend ignores keys it doesn't know.
+
+`--install` and `--update` call the same `step_*` functions, differing only by a mode argument, so the two paths can't drift apart.
+
 ### Uninstall
 
 ```bash

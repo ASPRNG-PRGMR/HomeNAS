@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
-# setup.sh — NAS stack installer/uninstaller for Fedora 43
+# setup.sh — NAS stack installer for Fedora 43
 #
 #   sudo bash setup.sh --install      (default if no flag is given)
+#   sudo bash setup.sh --update
 #   sudo bash setup.sh --uninstall
 #   bash setup.sh --help
+#
+# --install and --update run the same step_* functions below; the only
+# differences are the ones passed in via MODE, so the two paths cannot drift
+# apart. --update never overwrites anything you are expected to edit — see
+# step_deploy_config() and step_tls().
 #
 # The uninstaller removes everything the installer puts on the system and
 # leaves your stored files alone — see do_uninstall() for exactly what is
@@ -43,11 +49,18 @@ require_root() {
 
 usage() {
     cat <<USAGE
-setup.sh — HomeNAS installer/uninstaller
+setup.sh — HomeNAS installer
 
   sudo bash setup.sh --install     Build and install the stack (default)
+  sudo bash setup.sh --update      Rebuild and redeploy, preserving your edits
   sudo bash setup.sh --uninstall   Remove everything this installer created
   bash setup.sh --help             Show this message
+
+--update keeps anything you are expected to have edited:
+  $INSTALL_DIR/config.json   (merged: new keys added, your values kept)
+  /etc/ssl/nas/*.pem         (reused, so the browser exception still holds)
+  $NAS_ROOT
+  $BACKUP_ROOT
 
 --uninstall deliberately keeps your stored files:
   $NAS_ROOT
@@ -57,31 +70,37 @@ USAGE
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  INSTALL
+#  SHARED STEPS
+#  Each takes MODE ("install" or "update") where behaviour differs.
 # ─────────────────────────────────────────────────────────────────────────────
-do_install() {
-require_root --install
 
-echo "==> Installing dependencies"
-dnf install -y \
-    libuuid-devel\
-    cmake ninja-build gcc-c++ \
-    openssl-devel zlib-devel jsoncpp-devel \
-    brotli-devel \
-    sqlite-devel \
-    git \
-    nginx \
-    tailscale \
-    python3
+step_deps() {
+    echo "==> Installing dependencies"
+    # Run on update too, not just install: a newer revision of the tree may
+    # have added a dependency, and dnf is a no-op when everything is present.
+    dnf install -y \
+        libuuid-devel\
+        cmake ninja-build gcc-c++ \
+        openssl-devel zlib-devel jsoncpp-devel \
+        brotli-devel \
+        sqlite-devel \
+        git \
+        nginx \
+        tailscale \
+        python3
+}
 
-echo "==> Installing Drogon"
-# Check lib64 as well as lib — on Fedora (and any multilib distro) CMake
-# installs to /usr/local/lib64, so a lib-only check never sees an existing
-# install and we'd needlessly rebuild Drogon on every run.
-if [ -f /usr/local/lib/cmake/Drogon/DrogonConfig.cmake ] || \
-   [ -f /usr/local/lib64/cmake/Drogon/DrogonConfig.cmake ]; then
-    echo "Drogon already installed. Skipping..."
-else
+step_drogon() {
+    echo "==> Installing Drogon"
+    # Check lib64 as well as lib — on Fedora (and any multilib distro) CMake
+    # installs to /usr/local/lib64, so a lib-only check never sees an existing
+    # install and we'd needlessly rebuild Drogon on every run.
+    if [ -f /usr/local/lib/cmake/Drogon/DrogonConfig.cmake ] || \
+       [ -f /usr/local/lib64/cmake/Drogon/DrogonConfig.cmake ]; then
+        echo "Drogon already installed. Skipping..."
+        return
+    fi
+
     # Only clone if we don't already have a tree. A leftover /tmp/drogon used
     # to mean "skip entirely", which silently left Drogon uninstalled and the
     # backend build failing further down — resume the build/install instead.
@@ -116,183 +135,371 @@ else
     if [ -f /tmp/drogon/build/install_manifest.txt ]; then
         cp /tmp/drogon/build/install_manifest.txt "$DROGON_MANIFEST"
     fi
-fi
+}
 
+step_user_and_dirs() {
+    echo "==> Creating NAS system user"
+    id -u "$NAS_USER" &>/dev/null || \
+        useradd -r -s /sbin/nologin -d "$INSTALL_DIR" "$NAS_USER"
 
-echo "==> Creating NAS system user"
-id -u "$NAS_USER" &>/dev/null || \
-    useradd -r -s /sbin/nologin -d "$INSTALL_DIR" "$NAS_USER"
+    echo "==> Creating directories"
+    # mkdir -p throughout: on update these already exist and their contents
+    # are left untouched.
+    mkdir -p "$NAS_ROOT"
+    mkdir -p "$BACKUP_ROOT"
+    mkdir -p "$INSTALL_DIR"/{webui,sync-portal,logs,tmp_uploads}
+}
 
-echo "==> Creating directories"
-mkdir -p "$NAS_ROOT"
-mkdir -p "$BACKUP_ROOT"
-mkdir -p "$INSTALL_DIR"/{webui,sync-portal,logs,tmp_uploads}
+step_substitute_paths() {
+    # TO PUT HOME PATHS IN RESPECTIVE FILES
+    # NOTE: EventsController.cpp added here — it carries its own home_path
+    # fallback default (events_db_path), same as Filesystem/UploadController's
+    # nas_root fallback. Without this, that one fallback string would stay
+    # literally "home_path/..." forever (harmless as long as config.json's
+    # events_db_path key is always present, but a landmine if it's ever missing).
+    #
+    # Runs on update as well: a fresh `git pull` restores the home_path
+    # placeholders in the tracked files, so they need substituting again.
+    sed -i "s|home_path|$_HOME|g"\
+            backend/controllers/FilesystemController.cpp \
+            backend/controllers/UploadController.cpp \
+            backend/controllers/EventsController.cpp \
+            backend/controllers/AlertsController.cpp \
+            backend/main.cpp\
+            config.json\
+            nginx/nas.conf
+}
 
+step_build_backend() {
+    echo "==> Building backend"
+    cmake -S backend -B backend/build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -GNinja
+    cmake --build backend/build -j"$(nproc)"
+    if [ -f "$INSTALL_DIR/nas_backend" ]; then
+        rm -f "$INSTALL_DIR/nas_backend"
+    fi
+    cp backend/build/nas_backend "$INSTALL_DIR"
+}
 
-# TO PUT HOME PATHS IN RESPECTIVE FILES
-# NOTE: EventsController.cpp added here — it carries its own home_path
-# fallback default (events_db_path), same as Filesystem/UploadController's
-# nas_root fallback. Without this, that one fallback string would stay
-# literally "home_path/..." forever (harmless as long as config.json's
-# events_db_path key is always present, but a landmine if it's ever missing).
+step_deploy_config() {
+    local mode="$1"
+    local live="$INSTALL_DIR/config.json"
 
-sed -i "s|home_path|$_HOME|g"\
-        backend/controllers/FilesystemController.cpp \
-        backend/controllers/UploadController.cpp \
-        backend/controllers/EventsController.cpp \
-        backend/controllers/AlertsController.cpp \
-        backend/main.cpp\
-        config.json\
-        nginx/nas.conf
+    if [ "$mode" = install ] || [ ! -f "$live" ]; then
+        echo "==> Deploying config.json"
+        cp config.json "$live"
+        return
+    fi
 
-echo "==> Building backend"
-cmake -S backend -B backend/build \
-    -DCMAKE_BUILD_TYPE=Release \
-    -GNinja
-cmake --build backend/build -j"$(nproc)"
-if [ -f "$INSTALL_DIR/nas_backend" ]; then
-    rm -f "$INSTALL_DIR/nas_backend"
-fi
-cp backend/build/nas_backend "$INSTALL_DIR"
-cp config.json "$INSTALL_DIR"
+    # Update: the deployed config holds jwt_secret, admin_password and any
+    # other local edits, so it is never overwritten. Instead, keys the repo
+    # has gained are added and every existing value is kept — skipping the
+    # file entirely would leave a new release reading defaults for settings
+    # the user has never seen (e.g. the sync block's shape changed in 3.3).
+    echo "==> Merging config.json (your values are kept)"
+    python3 -I - "$live" config.json <<'PY'
+import json, shutil, sys
 
-echo "==> Deploying Web UI"
-cp -r webui/* "$INSTALL_DIR/webui/"
+live_path, repo_path = sys.argv[1], sys.argv[2]
 
-echo "==> Deploying sync portal (served by NGINX at /sync/)"
-cp -r sync-portal/* "$INSTALL_DIR/sync-portal/"
+def load(path, what):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except json.JSONDecodeError as e:
+        # Abort rather than fall back to the repo copy: overwriting a config
+        # that merely has a typo in it would destroy the secrets in it.
+        sys.exit(f"    ERROR: {what} is not valid JSON ({path})\n"
+                 f"           {e}\n"
+                 f"           Fix it and re-run --update; nothing was changed.")
 
-echo "==> Setting ownership"
-chown -R "$NAS_USER":"$NAS_USER" "$NAS_ROOT"
-chown -R "$NAS_USER":"$NAS_USER" "$BACKUP_ROOT"
-chown -R "$NAS_USER":"$NAS_USER" "$INSTALL_DIR"
+live = load(live_path, 'your deployed config')
+repo = load(repo_path, "the repo's config")
 
-echo "==> Setting SELinux contexts"
-# Allow NGINX to proxy to localhost:8080
-setsebool -P httpd_can_network_relay 1
-setsebool -P httpd_can_network_connect 1
+added = []
+def merge(dst, src, path=''):
+    for k, v in src.items():
+        p = f'{path}.{k}' if path else k
+        if k not in dst:
+            dst[k] = v
+            added.append(p)
+        elif isinstance(dst[k], dict) and isinstance(v, dict):
+            merge(dst[k], v, p)
+        # else: the deployed value wins, always — that is the whole point.
+merge(live, repo)
 
-# Label the webui directory so NGINX can read it
-semanage fcontext -a -t httpd_sys_content_t "$INSTALL_DIR/webui(/.*)?" || \
-semanage fcontext -m -t httpd_sys_content_t "$INSTALL_DIR/webui(/.*)?"
-restorecon -Rv "$INSTALL_DIR/webui"
+if added:
+    # Only touch the file when there is something to add, so an update that
+    # changes nothing leaves the user's formatting exactly as they left it.
+    shutil.copyfile(live_path, live_path + '.bak')
+    with open(live_path, 'w') as f:
+        json.dump(live, f, indent=2)
+        f.write('\n')
+    print('    added: ' + ', '.join(added))
+    print('    previous config saved as config.json.bak')
+else:
+    print('    no new keys — left untouched')
+PY
+}
 
-# Label the sync-portal directory the same way — NGINX serves it at /sync/
-# on the main domain, so it needs the same read access as webui/.
-semanage fcontext -a -t httpd_sys_content_t "$INSTALL_DIR/sync-portal(/.*)?" || \
-semanage fcontext -m -t httpd_sys_content_t "$INSTALL_DIR/sync-portal(/.*)?"
-restorecon -Rv "$INSTALL_DIR/sync-portal"
+step_deploy_static() {
+    echo "==> Deploying Web UI"
+    # Contents are cleared first so a file deleted from the repo doesn't live
+    # on in the deployed copy. Only ever touches directories we own.
+    rm -rf "${INSTALL_DIR:?}/webui"/* "${INSTALL_DIR:?}/sync-portal"/*
+    cp -r webui/* "$INSTALL_DIR/webui/"
 
-# Label the backend binary bin_t so systemd can exec it. The binary lives
-# under $HOME, so it otherwise inherits user_home_t, and init_t is denied
-# `execute` on that type — the unit then dies at step EXEC with
-# status=203/EXEC ("Permission denied") even though the file is mode 0755
-# and runs fine when launched by hand from a user shell. Done via semanage
-# (not chcon) so the label survives a filesystem relabel.
-semanage fcontext -a -t bin_t "$INSTALL_DIR/nas_backend" || \
-semanage fcontext -m -t bin_t "$INSTALL_DIR/nas_backend"
-restorecon -v "$INSTALL_DIR/nas_backend"
+    echo "==> Deploying sync portal (served by NGINX at /sync/)"
+    cp -r sync-portal/* "$INSTALL_DIR/sync-portal/"
+}
 
-# Label nas_root and the backup target so the backend can read/write them
-semanage fcontext -a -t var_t "$NAS_ROOT(/.*)?" || true
-restorecon -Rv "$NAS_ROOT"
-semanage fcontext -a -t var_t "$BACKUP_ROOT(/.*)?" || true
-restorecon -Rv "$BACKUP_ROOT"
+step_ownership() {
+    local mode="$1"
+    echo "==> Setting ownership"
+    chown -R "$NAS_USER":"$NAS_USER" "$INSTALL_DIR"
+    if [ "$mode" = install ]; then
+        chown -R "$NAS_USER":"$NAS_USER" "$NAS_ROOT"
+        chown -R "$NAS_USER":"$NAS_USER" "$BACKUP_ROOT"
+    else
+        # Update: don't walk the data trees, which can be arbitrarily large
+        # and whose ownership we haven't changed. The top directory is enough
+        # to correct a mount or restore that landed with the wrong owner.
+        chown "$NAS_USER":"$NAS_USER" "$NAS_ROOT" "$BACKUP_ROOT"
+    fi
+}
 
-echo "==> Generating self-signed TLS certificate"
-mkdir -p /etc/ssl/nas
-# subjectAltName is required, not optional: Chrome/Brave (and every current
-# browser) ignore the CN entirely and validate the hostname against SAN only.
-# A CN-only cert gets ERR_CERT_COMMON_NAME_INVALID even when the CN matches
-# exactly. Both nas.local and the loopback IPs are listed so connecting by
-# either name or address gives a plain "self-signed" warning rather than an
-# additional name-mismatch one.
-openssl req -x509 -nodes -newkey rsa:4096 -days 3650 \
-    -keyout /etc/ssl/nas/key.pem \
-    -out    /etc/ssl/nas/cert.pem \
-    -subj   "/CN=nas.local" \
-    -addext "subjectAltName=DNS:nas.local,IP:127.0.0.1,IP:::1"
-chmod 600 /etc/ssl/nas/key.pem
+step_selinux() {
+    local mode="$1"
+    echo "==> Setting SELinux contexts"
+    # Allow NGINX to proxy to localhost:8080
+    setsebool -P httpd_can_network_relay 1
+    setsebool -P httpd_can_network_connect 1
 
-echo "==> Registering nas.local in /etc/hosts"
-# Makes https://nas.local work on this machine with no Tailscale and no DNS.
-# Matched on a word-boundary hostname rather than a plain substring so an
-# unrelated entry (e.g. "my-nas.local.example") can't be mistaken for ours,
-# and so re-running setup.sh doesn't append a duplicate line each time.
-if grep -qE '^[^#]*[[:space:]]nas\.local([[:space:]]|$)' /etc/hosts; then
-    echo "nas.local already present in /etc/hosts. Skipping..."
-else
-    printf '\n# HomeNAS dashboard\n127.0.0.1\tnas.local\n::1\t\tnas.local\n' >> /etc/hosts
-    echo "Added nas.local -> 127.0.0.1 / ::1"
-fi
+    # Label the webui directory so NGINX can read it
+    semanage fcontext -a -t httpd_sys_content_t "$INSTALL_DIR/webui(/.*)?" || \
+    semanage fcontext -m -t httpd_sys_content_t "$INSTALL_DIR/webui(/.*)?"
+    restorecon -Rv "$INSTALL_DIR/webui"
 
-echo "==> Installing NGINX config"
-cp nginx/nas.conf /etc/nginx/conf.d/nas.conf
-rm -f /etc/nginx/conf.d/default.conf
-nginx -t
-systemctl enable --now nginx
+    # Label the sync-portal directory the same way — NGINX serves it at /sync/
+    # on the main domain, so it needs the same read access as webui/.
+    semanage fcontext -a -t httpd_sys_content_t "$INSTALL_DIR/sync-portal(/.*)?" || \
+    semanage fcontext -m -t httpd_sys_content_t "$INSTALL_DIR/sync-portal(/.*)?"
+    restorecon -Rv "$INSTALL_DIR/sync-portal"
 
-echo "==> Opening firewall ports"
-firewall-cmd --permanent --add-service=https
-firewall-cmd --permanent --add-service=http
-# No extra ports: the sync portal is served by NGINX at /sync/ over 443,
-# replacing the stopgap listener's daily-rotating port (devlog Phase 3.2).
-firewall-cmd --reload
+    # Label the backend binary bin_t so systemd can exec it. The binary lives
+    # under $HOME, so it otherwise inherits user_home_t, and init_t is denied
+    # `execute` on that type — the unit then dies at step EXEC with
+    # status=203/EXEC ("Permission denied") even though the file is mode 0755
+    # and runs fine when launched by hand from a user shell. Done via semanage
+    # (not chcon) so the label survives a filesystem relabel. The freshly
+    # copied binary carries the home-directory label, so this matters on
+    # update exactly as much as on install.
+    semanage fcontext -a -t bin_t "$INSTALL_DIR/nas_backend" || \
+    semanage fcontext -m -t bin_t "$INSTALL_DIR/nas_backend"
+    restorecon -v "$INSTALL_DIR/nas_backend"
 
-echo "==> Enabling Tailscale"
-systemctl enable --now tailscaled
+    # Label nas_root and the backup target so the backend can read/write them
+    semanage fcontext -a -t var_t "$NAS_ROOT(/.*)?" || true
+    semanage fcontext -a -t var_t "$BACKUP_ROOT(/.*)?" || true
+    if [ "$mode" = install ]; then
+        restorecon -Rv "$NAS_ROOT"
+        restorecon -Rv "$BACKUP_ROOT"
+    else
+        # Same reasoning as step_ownership: the rules are already in place and
+        # relabelling a large data tree on every update buys nothing.
+        echo "    (skipping recursive relabel of data directories on update)"
+    fi
+}
 
-echo "==> Installing and running systemd service"
-cp systemd/nas-backend.service /etc/systemd/system/
-sed -i "s|_home_|$_HOME|g" /etc/systemd/system/nas-backend.service
-sed -i "s|_user_|$_USER|g" /etc/systemd/system/nas-backend.service
-chmod o+x $_HOME
-chmod o+rx $_HOME/nas
-chmod o+rx $_HOME/nas/nas_main
-chmod -R o+rX $_HOME/nas/nas_main/webui
-systemctl daemon-reload
-systemctl reload nginx
-systemctl restart nas-backend
+step_tls() {
+    local mode="$1"
+    if [ "$mode" = update ] && [ -f /etc/ssl/nas/cert.pem ] && [ -f /etc/ssl/nas/key.pem ]; then
+        echo "==> Keeping existing TLS certificate"
+        # Regenerating would invalidate the exception already accepted in the
+        # browser, forcing the warning click-through again after every update.
+        return
+    fi
 
-echo ""
-echo "======================================================"
-echo " Done! The dashboard is now at:  https://nas.local"
-echo "======================================================"
-echo ""
-echo " Accept the self-signed certificate warning on first visit."
-echo " nas.local is already mapped to this machine in /etc/hosts,"
-echo " so no Tailscale and no DNS setup is needed for local access."
-echo ""
-echo " Required manual steps:"
-echo ""
-echo " 1. Edit $INSTALL_DIR/config.json"
-echo "    - Set jwt_secret  → a long random string"
-echo "    - Set admin_password → your chosen password"
-echo "    (Edit the deployed copy above, not the one in the repo —"
-echo "     the repo copy is version-controlled.)"
-echo ""
-echo " 2. Restart the backend:"
-echo "    sudo systemctl restart nas-backend"
-echo ""
-echo " Optional — access from other machines, via Tailscale:"
-echo ""
-echo " 3. Connect to Tailscale:"
-echo "    sudo tailscale up"
-echo ""
-echo " 4. On each *client* machine, add to its /etc/hosts:"
-echo "    <tailscale-ip>  nas.local"
-echo "    (or just use the Tailscale IP directly)"
-echo ""
-echo " To remove all of this again:  sudo bash setup.sh --uninstall"
-echo ""
+    echo "==> Generating self-signed TLS certificate"
+    mkdir -p /etc/ssl/nas
+    # subjectAltName is required, not optional: Chrome/Brave (and every current
+    # browser) ignore the CN entirely and validate the hostname against SAN only.
+    # A CN-only cert gets ERR_CERT_COMMON_NAME_INVALID even when the CN matches
+    # exactly. Both nas.local and the loopback IPs are listed so connecting by
+    # either name or address gives a plain "self-signed" warning rather than an
+    # additional name-mismatch one.
+    openssl req -x509 -nodes -newkey rsa:4096 -days 3650 \
+        -keyout /etc/ssl/nas/key.pem \
+        -out    /etc/ssl/nas/cert.pem \
+        -subj   "/CN=nas.local" \
+        -addext "subjectAltName=DNS:nas.local,IP:127.0.0.1,IP:::1"
+    chmod 600 /etc/ssl/nas/key.pem
+}
+
+step_hosts() {
+    echo "==> Registering nas.local in /etc/hosts"
+    # Makes https://nas.local work on this machine with no Tailscale and no DNS.
+    # Matched on a word-boundary hostname rather than a plain substring so an
+    # unrelated entry (e.g. "my-nas.local.example") can't be mistaken for ours,
+    # and so re-running setup.sh doesn't append a duplicate line each time.
+    if grep -qE '^[^#]*[[:space:]]nas\.local([[:space:]]|$)' /etc/hosts; then
+        echo "nas.local already present in /etc/hosts. Skipping..."
+    else
+        printf '\n# HomeNAS dashboard\n127.0.0.1\tnas.local\n::1\t\tnas.local\n' >> /etc/hosts
+        echo "Added nas.local -> 127.0.0.1 / ::1"
+    fi
+}
+
+step_nginx() {
+    echo "==> Installing NGINX config"
+    # Safe to overwrite on update: this file is ours, not a user-edited one.
+    cp nginx/nas.conf /etc/nginx/conf.d/nas.conf
+    rm -f /etc/nginx/conf.d/default.conf
+    nginx -t
+    systemctl enable --now nginx
+}
+
+step_firewall() {
+    echo "==> Opening firewall ports"
+    firewall-cmd --permanent --add-service=https
+    firewall-cmd --permanent --add-service=http
+    # No extra ports: the sync portal is served by NGINX at /sync/ over 443,
+    # replacing the stopgap listener's daily-rotating port (devlog Phase 3.2).
+    firewall-cmd --reload
+}
+
+step_tailscale() {
+    echo "==> Enabling Tailscale"
+    systemctl enable --now tailscaled
+}
+
+step_systemd_and_start() {
+    echo "==> Installing and running systemd service"
+    cp systemd/nas-backend.service /etc/systemd/system/
+    sed -i "s|_home_|$_HOME|g" /etc/systemd/system/nas-backend.service
+    sed -i "s|_user_|$_USER|g" /etc/systemd/system/nas-backend.service
+    chmod o+x $_HOME
+    chmod o+rx $_HOME/nas
+    chmod o+rx $_HOME/nas/nas_main
+    chmod -R o+rX $_HOME/nas/nas_main/webui
+    systemctl daemon-reload
+    systemctl reload nginx
+    systemctl restart nas-backend
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  UNINSTALL
+#  INSTALL
 # ─────────────────────────────────────────────────────────────────────────────
-# Reverses do_install() in roughly the opposite order it ran, so nothing is
-# in use while it's being removed. Every step is best-effort (see try()):
-# uninstalling a partial or already-partly-removed install has to work.
+do_install() {
+    require_root --install
+
+    step_deps
+    step_drogon
+    step_user_and_dirs
+    step_substitute_paths
+    step_build_backend
+    step_deploy_config install
+    step_deploy_static
+    step_ownership install
+    step_selinux install
+    step_tls install
+    step_hosts
+    step_nginx
+    step_firewall
+    step_tailscale
+    step_systemd_and_start
+
+    cat <<DONE
+
+======================================================
+ Done! The dashboard is now at:  https://nas.local
+======================================================
+
+ Accept the self-signed certificate warning on first visit.
+ nas.local is already mapped to this machine in /etc/hosts,
+ so no Tailscale and no DNS setup is needed for local access.
+
+ Required manual steps:
+
+ 1. Edit $INSTALL_DIR/config.json
+    - Set jwt_secret  -> a long random string
+    - Set admin_password -> your chosen password
+    (Edit the deployed copy above, not the one in the repo —
+     the repo copy is version-controlled.)
+
+ 2. Restart the backend:
+    sudo systemctl restart nas-backend
+
+ Optional — access from other machines, via Tailscale:
+
+ 3. Connect to Tailscale:
+    sudo tailscale up
+
+ 4. On each *client* machine, add to its /etc/hosts:
+    <tailscale-ip>  nas.local
+    (or just use the Tailscale IP directly)
+
+ Later:  sudo bash setup.sh --update     (keeps your config)
+         sudo bash setup.sh --uninstall
+
+DONE
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  UPDATE
+# ─────────────────────────────────────────────────────────────────────────────
+# Same steps as --install, with every step that would clobber something you
+# are expected to have edited switched to preserve mode. Intended use is
+# `git pull && sudo bash setup.sh --update`.
+do_update() {
+    require_root --update
+
+    if [ ! -d "$INSTALL_DIR" ]; then
+        echo "Nothing installed at $INSTALL_DIR — run --install first." >&2
+        exit 1
+    fi
+
+    step_deps
+    step_drogon
+    step_user_and_dirs
+    step_substitute_paths
+    step_build_backend
+    step_deploy_config update
+    step_deploy_static
+    step_ownership update
+    step_selinux update
+    step_tls update
+    step_hosts
+    step_nginx
+    step_firewall
+    step_tailscale
+    step_systemd_and_start
+
+    cat <<DONE
+
+======================================================
+ Update complete.  https://nas.local
+======================================================
+
+ Preserved, because you may have edited them:
+   $INSTALL_DIR/config.json   (merged — see the note above
+                               if any new keys were added)
+   /etc/ssl/nas/*.pem         (same certificate, so the browser
+                               exception you accepted still holds)
+   $NAS_ROOT
+   $BACKUP_ROOT
+
+ Replaced: the backend binary, webui/, sync-portal/, the NGINX
+ config and the systemd unit. Stale files removed from the repo
+ are cleared from webui/ and sync-portal/ rather than left behind.
+
+ If the dashboard looks unchanged, hard-reload it (Ctrl+Shift+R) —
+ the browser caches app.js and style.css.
+
+DONE
+}
+
 do_uninstall() {
 require_root --uninstall
 
@@ -443,6 +650,7 @@ echo ""
 # earlier versions keeps working unchanged.
 case "${1:---install}" in
     --install)   do_install ;;
+    --update)    do_update ;;
     --uninstall) do_uninstall ;;
     --help|-h)   usage ;;
     *)
