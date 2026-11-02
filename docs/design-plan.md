@@ -4,7 +4,7 @@
 **Status:** proposal, nothing implemented yet
 **Scope:** `webui/index.html`, `webui/style.css`, `webui/app.js`, plus one small
 backend addition if the left rail is built. The platform options at the end of
-this document also touch `nginx/nas.conf` and `setup.sh`.
+this document also touch `config.json`, `nginx/nas.conf` and `setup.sh`.
 
 **Contents**
 
@@ -259,10 +259,49 @@ Do this regardless of what happens with option 2. It is a day of CSS plus a
 bottom sheet, it needs no new tooling, and every version of option 2 that is
 worth doing sits on top of it.
 
-## Option 2 — build a phone application
+## Option 2 — build a phone application (Android)
 
-Taking the "no idea how or whether it is worth it" at face value, here is the
-honest version.
+**Resolved 2026-11-02: the phone is an Android.** That settles the open
+question this section used to hedge on, and it removes the single largest cost
+in the whole option — see *Distribution* below. The analysis has been rewritten
+accordingly; the iOS notes are kept only where they explain why a decision went
+the way it did.
+
+### Prerequisite: uploads are capped at 1 MB today
+
+Found while costing this out, and it blocks every version of option 2 as well
+as the existing web UI.
+
+`nginx/nas.conf` is configured correctly for large uploads:
+
+```nginx
+client_max_body_size 0;
+proxy_request_buffering off;
+```
+
+Drogon then undoes it. Its own config template (embedded in `drogon_ctl`) says:
+
+> `client_max_body_size`: Set the maximum body size of HTTP requests received
+> by drogon. The default value is `"1M"`. One can set it to `"1024"`, `"1k"`,
+> `"10M"`, `"1G"`, etc. Setting it to `""` means no limit.
+
+`config.json`'s `app` block never set the key, so nginx streamed the body
+through unbuffered and Drogon rejected anything over **1 MB** with a 413. A
+photo from any modern Android phone is 3–8 MB; a video is hundreds. Uploads
+were effectively broken for real files.
+
+**Fixed** by adding `"client_max_body_size": "8G"` to `config.json`. A finite
+cap rather than `""`: with `proxy_request_buffering off`, Drogon spills bodies
+over `max_memory_body_size` (default 64K) to `upload_path`, which sits on the
+same disk as the NAS — so an unlimited cap lets one request fill the disk.
+8G is far above any phone file while still bounding that.
+
+Deploy with `sudo bash setup.sh --update`; the config merge adds new keys to an
+existing deployment without touching existing values.
+
+Not verified against a running server: `nas-backend` was `inactive` at the time
+of writing, so the 1 MB figure comes from Drogon's documented default plus the
+missing key, not an observed 413.
 
 ### What a native app can do that a browser cannot
 
@@ -286,20 +325,16 @@ So the decision reduces to a single question: *do you want automatic photo
 backup?* If no, native buys essentially nothing. If yes, it is the one feature
 that justifies the whole exercise.
 
-### The distribution problem, which is the real cost
+### Distribution — no longer a cost
 
-This matters more than the code and is the part that is easy to miss:
+This was going to be the deciding factor and Android removes it. Build an APK,
+install it, done: no developer account, no fee, no review, no expiry.
 
-- **iOS.** There is no casual way to install your own app. A free Apple
-  developer account re-signs builds that expire **every 7 days**; a paid
-  account is **$99/year**, and App Store review for an app that only talks to
-  the author's own house is an argument you do not want to have.
-- **Android.** Genuinely easy. Build an APK, install it, done. No account, no
-  fee, no review.
-
-If the phone in question is an Android, option 2 is realistic. If it is an
-iPhone, the 7-day re-signing treadmill alone is a strong argument for stopping
-at a PWA.
+For contrast, and to record why the recommendation would otherwise have been
+different: on iOS a free developer account re-signs builds that expire **every
+7 days**, a paid account is **$99/year**, and App Store review for an app that
+only talks to the author's own house is an argument not worth having. That
+treadmill alone would have been enough to stop at a PWA. It does not apply.
 
 ### The middle path, and the actual recommendation
 
@@ -311,8 +346,11 @@ be on the radar and it captures most of the perceived value of an app:
   an app.
 - A service worker caching `index.html`, `style.css`, `app.js` for an instant
   offline-capable shell.
-- On Android additionally: Web Share Target (share files straight to the NAS)
-  and web push for alerts.
+- **On Android this is much stronger than on iOS.** Chrome generates a real
+  WebAPK, so it gets an app-drawer entry and appears in the app switcher — and
+  it can register as a **Web Share Target**, which makes "Share → HomeNAS"
+  work from Gallery or any other app. Web push works properly too. Between
+  them those cover a large share of what is actually wanted from a NAS app.
 
 Cost: roughly 150 lines, no build toolchain, no second codebase, no store.
 
@@ -324,16 +362,50 @@ certificate for the MagicDNS `*.ts.net` name. That is worth doing on its own
 merits and is a prerequisite for the PWA, so it should be folded into
 `setup.sh`.
 
+### Android specifics that will bite
+
+- **Since Android 7, apps ignore user-installed CAs.** A native client's HTTP
+  stack will not trust the self-signed `nas.local` cert unless the app ships a
+  `network_security_config.xml` pinning the CA. `tailscale cert` fixes this
+  *and* the PWA's secure-context requirement — one prerequisite serving both
+  paths, which is a further argument for doing it first.
+- **`nas.local` mDNS resolution is unreliable on Android.** Use the Tailscale
+  MagicDNS `*.ts.net` name, not `.local`. A background worker should not depend
+  on mDNS at all.
+- **Android 13+ needs `READ_MEDIA_IMAGES` / `READ_MEDIA_VIDEO`**, not
+  `READ_EXTERNAL_STORAGE`; Android 14 added partial-access grants, which a
+  backup app does not want. Sideloading avoids the Play Store declaration that
+  full media access would otherwise require.
+- **Doze and battery optimisation** defer periodic work. Fine for photo
+  backup, which is not time-critical, but `WorkManager` is the only sane way to
+  schedule it.
+
+### Two gaps in the upload API a backup client must work around
+
+Beyond the 1 MB cap above, `/api/upload` takes standard multipart with a
+`?path=` destination and ignores the field name, so an OkHttp `MultipartBody`
+posts to it directly. But:
+
+- **`f.saveAs()` overwrites silently** and there is no existence check, so the
+  client has to track its own uploaded-set — `/api/ls` is the only way to ask
+  what is already there.
+- **There is no resumable or chunked upload.** A failed transfer restarts from
+  zero, which matters on a phone uploading a multi-gigabyte video over a
+  flaky link.
+
 ### If a native app is still wanted
 
 Realistic stacks, ranked by effort-to-value here:
 
 | Approach | Why | Cost |
 | --- | --- | --- |
-| **Capacitor** | Wraps the *existing* `webui/` in a native shell and adds native plugins for camera and background upload. Ships one codebase. | Lowest, if the PWA exists first |
-| **Kotlin + Compose** (Android only) | `WorkManager` + `MediaStore` is exactly the right API for camera backup and is first-class. No iOS tax. | Moderate, one platform |
-| **Flutter** | One codebase for both; `background_downloader` is solid; good at list UIs. New language (Dart). | High |
-| **React Native / Expo** | Closest to existing `app.js` knowledge; Expo builds without Xcode. Background upload support is the weakest of these. | High |
+| **Capacitor + a Kotlin plugin** ← recommended | Wraps the *existing* `webui/` unchanged and adds **only** the backup worker as native code. One UI codebase. It can also pin your own CA, so it sidesteps the cert problem the PWA cannot. | Lowest, if the PWA exists first |
+| **Kotlin + Compose** | `WorkManager` + `MediaStore` + OkHttp multipart is exactly the right API set and is first-class. Best-feeling UI, but duplicates the whole file browser. | Moderate |
+| **Flutter** | `background_downloader` is solid and it is good at list UIs, but cross-platform is now a benefit you are not buying, and Dart is a new language. | High, for less reason |
+| **React Native / Expo** | Closest to existing `app.js` knowledge, but background upload support is the weakest of these — which is the one thing the app exists to do. | High |
+
+Android-only is now the target, so Flutter and React Native both lose their
+main justification: there is no second platform to amortise them over.
 
 The API does not block any of them: `/api/*` is already clean JSON with JWT
 auth, so a second client is a presentation-layer job. One gap to close first —
@@ -343,15 +415,20 @@ every 24 hours. A mobile app wants a long-lived refresh token.
 
 ### Verdict
 
-**Do not build a native app yet.** The ordering that gets the most value per
-hour:
+Android makes a native app *viable*, not yet *necessary*. The distinction
+matters: the only thing it buys is automatic camera-roll backup, so build it
+when that is the thing being missed, not before. The ordering that gets the
+most value per hour:
 
-1. Fix the responsive web UI (option 1) — mandatory, cheap, fixes the actual
-   complaint.
-2. Add `tailscale cert` + manifest + service worker — makes it installable and
-   feel like an app for ~150 lines.
-3. Live with that for a few weeks. If automatic camera-roll backup turns out to
-   be the thing that is genuinely missing, wrap the same web UI in Capacitor
-   and add *only* that one native capability.
+0. **Deploy the upload-cap fix.** Done in `config.json`; needs
+   `sudo bash setup.sh --update`. Nothing else works without it.
+1. **Fix the responsive web UI** (option 1) — mandatory, cheap, fixes the
+   actual complaint.
+2. **`tailscale cert` + manifest + service worker.** On Android this yields an
+   app-drawer entry, a chrome-less window, offline shell, push, and
+   "Share → HomeNAS" for ~150 lines. For many uses that is the whole app.
+3. **Only if automatic photo backup turns out to be the gap:** wrap the same
+   web UI in Capacitor and add one Kotlin plugin — `MediaStore` query +
+   `WorkManager` + OkHttp multipart to `/api/upload`.
 
-Step 3 may well never be needed, and nothing in steps 1–2 is wasted if it is.
+Step 3 may never be needed, and nothing in steps 0–2 is wasted if it is.

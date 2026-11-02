@@ -14,7 +14,8 @@
     "run_as_daemon": false,
     "reuse_port": false,
     "home_page": "index.html",
-    "max_connection_num": 100000
+    "max_connection_num": 100000,
+    "client_max_body_size": "8G"
   },
   "custom_config": {
     "nas_root": "home_path/nas/nas_storage",
