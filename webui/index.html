@@ -546,33 +546,6 @@
       }
     });
 
-    function attachCrumbDrop(el, destPath) {
-      el.addEventListener('dragenter', e => {
-        e.preventDefault();
-        if (!window._dragSourcePath) return;
-        const srcParent = '/' + window._dragSourcePath.substring(0, window._dragSourcePath.lastIndexOf('/'));
-        const normalSrcParent = srcParent === '//' ? '/' : srcParent;
-        if (normalSrcParent === destPath) return; // already here
-        el.classList.add('crumb-drop-target');
-      });
-      el.addEventListener('dragover', e => {
-        e.preventDefault();
-        e.dataTransfer.dropEffect = 'move';
-      });
-      el.addEventListener('dragleave', e => {
-        if (!el.contains(e.relatedTarget)) el.classList.remove('crumb-drop-target');
-      });
-      el.addEventListener('drop', async e => {
-        e.preventDefault();
-        el.classList.remove('crumb-drop-target');
-        if (!window._dragSourcePath || !window._dragSourceName) return;
-        const srcFull  = '/' + window._dragSourcePath;
-        const destFull = (destPath === '/' ? '' : destPath) + '/' + window._dragSourceName;
-        if (srcFull === destFull) return;
-        await window._nasMove(srcFull, destFull);
-      });
-    }
-
     function syncPathBar() {
       const onFiles = !document.getElementById('tab-files').classList.contains('hidden');
       const crumbs  = breadcrumb.querySelectorAll('.crumb');
@@ -587,8 +560,9 @@
 
       pathBar.classList.remove('hidden');
 
-      // Home button is a drop target for root
-      attachCrumbDrop(pathHome, '/');
+      // Home button is a drop target for root. app.js's drag code finds
+      // drop targets up here by this attribute.
+      pathHome.dataset.dropPath = '/';
 
       // Build pill content from breadcrumb
       pathPill.innerHTML = '';
@@ -601,7 +575,7 @@
         if (!span.classList.contains('active'))
           span.addEventListener('click', () => c.click());
         // All crumbs (including root /) are drop targets
-        attachCrumbDrop(span, crumbPath);
+        span.dataset.dropPath = crumbPath;
         pathPill.appendChild(span);
         if (i < crumbs.length - 1) {
           const sep = document.createElement('span');

@@ -226,7 +226,6 @@ function renderFileList(items) {
     const modified = formatDate(item.modified);
     return `
       <div class="file-row"
-           draggable="true"
            data-path="${escHtml(item.path)}"
            data-dir="${item.is_dir}"
            data-name="${escHtml(item.name)}">
@@ -294,73 +293,160 @@ function renderFileList(items) {
 // held. On file rows — and on every row with Shift down — the whole row is
 // rearrange-only, split at its midpoint. So Shift is the "I am just
 // rearranging" key: with it held there is no position on screen that moves
-// anything into a folder. (Shift rather than Ctrl or Alt because browsers
-// reinterpret those two mid-drag as "copy" and "link", which this drag does
-// not allow, and would then refuse the drop.)
+// anything into a folder. A label follows the cursor saying exactly what
+// letting go will do, so none of this has to be judged by eye.
 //
-// Nothing here is silent or one-way any more: a move shows a toast with
-// Undo, and a folder dropped on a folder asks first (subfolder or merge).
-
-// What's being dragged. Also read by the path-bar drop zones in index.html.
-let _dragSourcePath  = null;
-let _dragSourceName  = null;
-let _dragSourceIsDir = false;
-// Set only when the press began on a row's drag handle.
-let _dragViaHandle   = false;
-
-Object.defineProperties(window, {
-  _dragSourcePath: { get: () => _dragSourcePath, configurable: true },
-  _dragSourceName: { get: () => _dragSourceName, configurable: true }
-});
+// This is built on pointer events, not the HTML5 drag-and-drop API. Native
+// DnD suspends keyboard events for the length of the drag and leaves it to
+// each browser whether drag events carry modifier state at all — Firefox on
+// Linux reports shiftKey as false throughout — so "hold Shift" cannot be
+// made reliable on top of it. With pointer events Shift is an ordinary key,
+// the label can track the cursor, and touch screens work too.
 
 // Fraction of a folder row's height, at top and bottom, that means
 // "rearrange" rather than "move into". Adjacent rows' edge bands meet at the
 // boundary between them, so the rearrange target between two folders is
-// twice this — deliberately a bit bigger than the move-into band.
-const EDGE_BAND = 0.28;
+// twice this.
+const EDGE_BAND = 0.3;
+// Pointer travel before a press on the handle becomes a drag.
+const DRAG_THRESHOLD = 4;
 
 const fileListEl = document.getElementById('file-list');
 
-fileListEl.addEventListener('mousedown', e => {
-  _dragViaHandle = !!e.target.closest('.drag-handle');
+// The drag in progress, or null.
+let _drag = null;
+
+// Nothing in the list is natively draggable any more; stop stray native
+// drags (a selected filename, an emoji icon) from starting.
+fileListEl.addEventListener('dragstart', e => e.preventDefault());
+
+fileListEl.addEventListener('pointerdown', e => {
+  const handle = e.target.closest('.drag-handle');
+  if (!handle || e.button !== 0 || _drag) return;
+  const row = handle.closest('.file-row');
+  if (!row) return;
+  e.preventDefault();                       // no text selection while dragging
+  handle.setPointerCapture(e.pointerId);
+  _drag = {
+    row, pointerId: e.pointerId,
+    path: row.dataset.path, name: row.dataset.name, isDir: row.dataset.dir === 'true',
+    startX: e.clientX, startY: e.clientY, x: e.clientX, y: e.clientY,
+    shift: e.shiftKey, active: false, scroller: null, raf: 0
+  };
 });
 
-fileListEl.addEventListener('dragstart', e => {
-  const row = e.target.closest?.('.file-row');
-  // Rows are draggable only by the handle. Without this a drag begun
-  // anywhere else on the row would still start, carrying nothing.
-  if (!row || !_dragViaHandle) { e.preventDefault(); return; }
-  _dragSourcePath  = row.dataset.path;
-  _dragSourceName  = row.dataset.name;
-  _dragSourceIsDir = row.dataset.dir === 'true';
-  e.dataTransfer.effectAllowed = 'move';
-  e.dataTransfer.setData('text/plain', _dragSourceName);
-  setTimeout(() => row.classList.add('dragging'), 0);
-  setDragHint(e.shiftKey);
+document.addEventListener('pointermove', e => {
+  if (!_drag || e.pointerId !== _drag.pointerId) return;
+  _drag.x = e.clientX; _drag.y = e.clientY; _drag.shift = e.shiftKey;
+  if (!_drag.active) {
+    if (Math.hypot(e.clientX - _drag.startX, e.clientY - _drag.startY) < DRAG_THRESHOLD) return;
+    _drag.active = true;
+    _drag.row.classList.add('dragging');
+    document.body.classList.add('row-dragging');
+    _drag.scroller = scrollParent(fileListEl);
+    _drag.raf = requestAnimationFrame(autoScroll);
+  }
+  trackDrag();
 });
 
-fileListEl.addEventListener('dragend', () => {
-  fileListEl.querySelector('.file-row.dragging')?.classList.remove('dragging');
-  _dragSourcePath = _dragSourceName = null;
-  _dragSourceIsDir = false;
-  _dragViaHandle   = false;
+document.addEventListener('pointerup', e => {
+  if (!_drag || e.pointerId !== _drag.pointerId) return;
+  _drag.x = e.clientX; _drag.y = e.clientY; _drag.shift = e.shiftKey;
+  const drag = _drag;
+  const intent = drag.active ? dropIntent() : null;
+  endDrag();
+  if (intent) performDrop(drag, intent);
+});
+
+document.addEventListener('pointercancel', e => {
+  if (_drag && e.pointerId === _drag.pointerId) endDrag();
+});
+
+// Shift pressed or released without moving the mouse must update the marker
+// and label straight away; Esc abandons the drag.
+function onDragKey(e) {
+  if (!_drag || !_drag.active) return;
+  if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); endDrag(); return; }
+  if (e.key === 'Shift') { _drag.shift = e.type === 'keydown'; trackDrag(); }
+}
+document.addEventListener('keydown', onDragKey, true);
+document.addEventListener('keyup',   onDragKey, true);
+// Alt-tabbing away mid-drag would otherwise leave it stuck to the cursor.
+window.addEventListener('blur', () => { if (_drag) endDrag(); });
+
+function endDrag() {
+  if (!_drag) return;
+  const wasActive = _drag.active;
+  cancelAnimationFrame(_drag.raf);
+  _drag.row.classList.remove('dragging');
+  _drag = null;
+  document.body.classList.remove('row-dragging');
   clearDropMarks();
   setDragHint(null);
-});
-
-function clearDropMarks() {
-  fileListEl.querySelectorAll('.drop-target, .drop-before, .drop-after')
-    .forEach(r => r.classList.remove('drop-target', 'drop-before', 'drop-after'));
+  setDragTip(null);
+  if (wasActive) {
+    // The release also produces a click; swallow that one so it can't open
+    // or download whatever happens to be under the cursor.
+    const swallow = ev => { ev.stopPropagation(); ev.preventDefault(); };
+    window.addEventListener('click', swallow, { capture: true, once: true });
+    setTimeout(() => window.removeEventListener('click', swallow, true), 0);
+  }
 }
 
-// Resolve a pointer position to { row, zone } — zone is 'before', 'after'
-// or 'into' — or null when dropping there would do nothing.
-function dropIntent(e) {
-  if (!_dragSourcePath) return null;
+function clearDropMarks() {
+  document.querySelectorAll('.drop-target, .drop-before, .drop-after, .crumb-drop-target')
+    .forEach(r => r.classList.remove('drop-target', 'drop-before', 'drop-after', 'crumb-drop-target'));
+}
+
+function scrollParent(el) {
+  for (let p = el; p && p !== document.body; p = p.parentElement) {
+    const oy = getComputedStyle(p).overflowY;
+    if ((oy === 'auto' || oy === 'scroll') && p.scrollHeight > p.clientHeight) return p;
+  }
+  return document.scrollingElement;
+}
+
+// Native drag-and-drop scrolled the page when you neared an edge; do the same.
+function autoScroll() {
+  if (!_drag || !_drag.active) return;
+  const zone = 70, max = 14;
+  const fromTop = _drag.y, fromBottom = window.innerHeight - _drag.y;
+  let dy = 0;
+  if      (fromTop    < zone) dy = -max * (1 - Math.max(fromTop, 0)    / zone);
+  else if (fromBottom < zone) dy =  max * (1 - Math.max(fromBottom, 0) / zone);
+  if (dy) {
+    const before = _drag.scroller.scrollTop;
+    _drag.scroller.scrollTop += dy;
+    if (_drag.scroller.scrollTop !== before) trackDrag();
+  }
+  _drag.raf = requestAnimationFrame(autoScroll);
+}
+
+// Resolve the current pointer position to what a release would do:
+//   { zone: 'before' | 'after' | 'into', row }   on the file list
+//   { zone: 'crumb', el, destPath }              on the path bar
+// or null when letting go there would change nothing.
+function dropIntent() {
+  const d = _drag;
+  if (!d.row.isConnected) return null;      // list re-rendered under the drag
+  const under = document.elementFromPoint(d.x, d.y);
+  if (!under) return null;
+
+  // Path bar: move up to a parent folder.
+  const crumb = under.closest('[data-drop-path]');
+  if (crumb) {
+    const destPath = crumb.dataset.dropPath;                       // "/" or "/a/b"
+    const srcDir   = '/' + d.path.substring(0, d.path.lastIndexOf('/') + 1).replace(/\/$/, '');
+    if (srcDir === destPath) return null;                          // already there
+    if (('/' + d.path) === destPath) return null;
+    return { zone: 'crumb', el: crumb, destPath };
+  }
+
+  if (!fileListEl.contains(under)) return null;
   const rows = [...fileListEl.querySelectorAll('.file-row')];
   if (!rows.length) return null;
 
-  let row = e.target.closest?.('.file-row');
+  let row = under.closest('.file-row');
   let zone;
   if (!row) {
     // Over the header or the empty space under the list: snap to the
@@ -368,59 +454,82 @@ function dropIntent(e) {
     // Anywhere else that isn't a row (the gap beside one) changes nothing.
     const first = rows[0].getBoundingClientRect();
     const last  = rows[rows.length - 1].getBoundingClientRect();
-    if      (e.clientY < first.top)   { row = rows[0]; zone = 'before'; }
-    else if (e.clientY > last.bottom) { row = rows[rows.length - 1]; zone = 'after'; }
+    if      (d.y < first.top)   { row = rows[0]; zone = 'before'; }
+    else if (d.y > last.bottom) { row = rows[rows.length - 1]; zone = 'after'; }
     else return null;
   } else {
     const box = row.getBoundingClientRect();
-    const y   = (e.clientY - box.top) / box.height;
-    const canEnter = row.dataset.dir === 'true' && !e.shiftKey;
+    const y   = (d.y - box.top) / box.height;
+    const canEnter = row.dataset.dir === 'true' && !d.shift;
     if (!canEnter)                 zone = y < 0.5 ? 'before' : 'after';
     else if (y < EDGE_BAND)        zone = 'before';
     else if (y > 1 - EDGE_BAND)    zone = 'after';
     else                           zone = 'into';
   }
 
-  const src = rows.findIndex(r => r.dataset.path === _dragSourcePath);
+  const src = rows.indexOf(d.row);
   const dst = rows.indexOf(row);
   if (dst === src) return null;                          // onto itself
   // Positions that leave the row exactly where it already is.
   if (zone === 'before' && dst === src + 1) return null;
   if (zone === 'after'  && dst === src - 1) return null;
-  return { row, zone };
+  return { zone, row };
 }
 
-// Repaint the drop marker for the current pointer position. Runs on
-// dragenter as well as dragover: dragover is what tracks movement *within* a
-// row (edge vs middle), but browsers throttle it, and crossing onto a new
-// row must never leave the previous row's marker showing in the meantime.
-function trackDrag(e) {
-  if (!_dragSourcePath) return;          // a desktop file drag: upload path
-  e.preventDefault();
-  setDragHint(e.shiftKey);
-  const intent = dropIntent(e);
+// Repaint the marker, the cursor label and the legend for the current
+// pointer position and Shift state.
+function trackDrag() {
+  if (!_drag || !_drag.active) return;
+  const intent = dropIntent();
   clearDropMarks();
-  if (!intent) { e.dataTransfer.dropEffect = 'none'; return; }
-  e.dataTransfer.dropEffect = 'move';
-  intent.row.classList.add(
-    intent.zone === 'into' ? 'drop-target' : 'drop-' + intent.zone);
+  setDragHint(_drag.shift);
+  if (!intent) { setDragTip(null); return; }
+
+  if (intent.zone === 'crumb') {
+    intent.el.classList.add('crumb-drop-target');
+    setDragTip('into', `Move to “${crumbLabel(intent.destPath)}”`);
+    return;
+  }
+  const name = intent.row.dataset.name;
+  if (intent.zone === 'into') {
+    intent.row.classList.add('drop-target');
+    setDragTip('into', `Move into “${name}”`);
+  } else {
+    intent.row.classList.add('drop-' + intent.zone);
+    setDragTip('order', `Move ${intent.zone === 'before' ? 'above' : 'below'} “${name}”`);
+  }
 }
-fileListEl.addEventListener('dragover',  trackDrag);
-fileListEl.addEventListener('dragenter', trackDrag);
 
-fileListEl.addEventListener('dragleave', e => {
-  if (!fileListEl.contains(e.relatedTarget)) clearDropMarks();
-});
+function crumbLabel(path) {
+  return path === '/' ? 'Home' : path.substring(path.lastIndexOf('/') + 1);
+}
 
-fileListEl.addEventListener('drop', async e => {
-  if (!_dragSourcePath) return;
-  e.preventDefault();
-  const intent = dropIntent(e);
-  clearDropMarks();
-  if (!intent) return;
+// The label beside the cursor. kind: 'order' (rearranging) or 'into'
+// (moving somewhere else); null hides it.
+function setDragTip(kind, text) {
+  let el = document.getElementById('drag-tip');
+  if (!kind) { el?.remove(); return; }
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'drag-tip';
+    document.body.appendChild(el);
+  }
+  el.dataset.kind = kind;
+  el.textContent = text;
+  // Below-right of the cursor, flipped back on screen near the edges.
+  const pad = 8, w = el.offsetWidth, h = el.offsetHeight;
+  let x = _drag.x + 16, y = _drag.y + 18;
+  if (x + w > window.innerWidth  - pad) x = _drag.x - w - 12;
+  if (y + h > window.innerHeight - pad) y = _drag.y - h - 12;
+  el.style.left = Math.max(pad, x) + 'px';
+  el.style.top  = Math.max(pad, y) + 'px';
+}
 
-  // dragend clears these before the awaits below resolve — take copies.
-  const src = { path: _dragSourcePath, name: _dragSourceName, isDir: _dragSourceIsDir };
+async function performDrop(src, intent) {
+  if (intent.zone === 'crumb') {
+    const destFull = (intent.destPath === '/' ? '' : intent.destPath) + '/' + src.name;
+    return moveEntry('/' + src.path, destFull, src.name, crumbLabel(intent.destPath));
+  }
   const dst = { path: intent.row.dataset.path, name: intent.row.dataset.name };
 
   if (intent.zone !== 'into') return rearrange(src.name, dst.name, intent.zone);
@@ -437,7 +546,7 @@ fileListEl.addEventListener('drop', async e => {
   } else if (choice === 'merge') {
     await mergeFolders('/' + src.path, '/' + dst.path, src.name, dst.name);
   }
-});
+}
 
 // ── the three outcomes ───────────────────────────────────────────────────────
 
@@ -457,8 +566,8 @@ async function rearrange(srcName, dstName, zone) {
   });
 }
 
-// Move one entry to a new path, with Undo. Used by row drops and by the
-// path-bar drop zones.
+// Move one entry to a new path, with Undo. Used by drops on a folder row
+// and on the path bar.
 async function moveEntry(srcFull, destFull, name, destLabel) {
   if (srcFull === destFull) return;
   const where = currentPath;
@@ -484,13 +593,6 @@ async function moveEntry(srcFull, destFull, name, destLabel) {
     }
   });
 }
-window._nasMove = (srcFull, destFull) => {
-  const name   = srcFull.substring(srcFull.lastIndexOf('/') + 1);
-  const parent = destFull.substring(0, destFull.lastIndexOf('/'));
-  return moveEntry(srcFull, destFull, name,
-                   parent ? parent.substring(parent.lastIndexOf('/') + 1) : 'Home');
-};
-
 async function mergeFolders(srcFull, destFull, srcName, destName) {
   const data = await post('/api/merge', { from: srcFull, to: destFull });
   if (!data) return;
@@ -550,8 +652,9 @@ function askFolderDrop(srcName, destName) {
 }
 
 // ── drag hint ────────────────────────────────────────────────────────────────
-// A one-line legend shown only while a row is being dragged. Pass null to
-// hide it, otherwise whether Shift is currently held.
+// A one-line legend shown only while a row is being dragged; the label by
+// the cursor says what a release will do, this says how to change that.
+// Pass null to hide it, otherwise whether Shift is currently held.
 function setDragHint(shift) {
   let el = document.getElementById('drag-hint');
   if (shift === null) { el?.remove(); return; }
@@ -564,8 +667,8 @@ function setDragHint(shift) {
   if (el.dataset.mode === mode) return;
   el.dataset.mode = mode;
   el.innerHTML = shift
-    ? `<b>Rearranging only</b> — drops can’t go into a folder while <kbd>Shift</kbd> is held`
-    : `Drop <b>between</b> rows to rearrange · <b>on</b> a folder to move into it · hold <kbd>Shift</kbd> to only rearrange`;
+    ? `<b>Rearranging only</b> — nothing goes into a folder while <kbd>Shift</kbd> is held · <kbd>Esc</kbd> cancels`
+    : `Hold <kbd>Shift</kbd> to only rearrange · <kbd>Esc</kbd> cancels`;
 }
 
 // ── toast ────────────────────────────────────────────────────────────────────
@@ -630,23 +733,18 @@ const appShell    = document.getElementById('auth-shell');
 const dropOverlay = document.getElementById('drop-overlay');
 let dragCounter   = 0;
 
-// These are for files dragged in from the desktop. A row being dragged
-// within the list (_dragSourcePath set) is not an upload and must not raise
-// the "drop to upload" overlay or throw its enter/leave count off.
 appShell.addEventListener('dragenter', e => {
-  if (activeTab !== 'files' || _dragSourcePath) return;
+  if (activeTab !== 'files') return;
   e.preventDefault(); dragCounter++;
   dropOverlay.classList.remove('hidden');
 });
 appShell.addEventListener('dragleave', () => {
-  if (_dragSourcePath) return;
   dragCounter = Math.max(0, dragCounter - 1);
   if (dragCounter === 0) dropOverlay.classList.add('hidden');
 });
 appShell.addEventListener('dragover', e => e.preventDefault());
 appShell.addEventListener('drop', e => {
   if (activeTab !== 'files') return;
-  if (_dragSourcePath) { e.preventDefault(); return; }
   e.preventDefault(); dragCounter = 0;
   dropOverlay.classList.add('hidden');
   uploadFiles(e.dataTransfer.files);

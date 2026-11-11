@@ -881,11 +881,41 @@ main#file-list {
 .drag-handle:active { cursor: grabbing; }
 
 /* Row being dragged */
-/* No pointer-events:none here: the row has to keep receiving dragover so
-   that hovering its own slot registers as "no change" and clears the marker
-   left on whichever row the pointer came from. */
 .file-row.dragging {
   opacity: .35;
+}
+/* While a row is being dragged: one cursor everywhere, no text selection,
+   and no hover highlights competing with the drop marker. */
+body.row-dragging, body.row-dragging * { cursor: grabbing !important; user-select: none; }
+body.row-dragging .file-row:hover { background: none; }
+body.row-dragging .file-row.drop-target { background: var(--accent-faint); }
+/* The handle starts a drag on touch screens too, instead of scrolling. */
+.drag-handle { touch-action: none; }
+
+/* Label that follows the cursor during a drag, naming what a release does */
+#drag-tip {
+  position: fixed;
+  z-index: 160;
+  pointer-events: none;
+  background: var(--surface2);
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  box-shadow: 0 6px 20px rgba(0,0,0,.3);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 500;
+  max-width: 320px;
+  overflow: hidden;
+  padding: 5px 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Moving into a folder is the consequential one — make it look different
+   from a rearrange at a glance. */
+#drag-tip[data-kind="into"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
 }
 
 /* Folder row being hovered over as a valid drop target */
