@@ -25,6 +25,9 @@
   --radius:        8px;
   --mono:          'JetBrains Mono', 'Fira Mono', monospace;
   --nav-h:         80px;
+  /* Height of the nav pills and theme toggle. The wordmark is seated on
+     their bottom edge, so all three read it from here. */
+  --nav-pill-h:    34px;
 
   /* Hover/selection overlays. Light-on-dark here, dark-on-light in the light
      theme — these are the tokens that break most visibly if hardcoded. */
@@ -242,8 +245,8 @@ body {
   border-radius: 50%;
   color: var(--text-dim);
   cursor: pointer;
-  width: 34px;
-  height: 34px;
+  width: var(--nav-pill-h);
+  height: var(--nav-pill-h);
   font-size: 14px;
   line-height: 1;
   display: flex;
@@ -276,6 +279,11 @@ body {
   border: 1.5px solid var(--border-strong);
   border-radius: 12px;
   padding: 4px;
+  /* Fixed, not content-sized: the alert badge used to make the left pill a
+     pixel taller than the right one, so they had no common bottom edge. */
+  height: var(--nav-pill-h);
+  box-sizing: border-box;
+  align-items: center;
 }
 
 .nav-tab {
@@ -348,7 +356,9 @@ body {
   position: absolute;
   left: 50%;
   top: 50%;
-  transform: translate(-50%, -50%);
+  /* Top edge level with the top of the pills (which are centred on the
+     same 50% line); see #nav-wordmark::before for why. */
+  transform: translate(-50%, calc(var(--nav-pill-h) / -2));
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -360,14 +370,26 @@ body {
 /* HOME NAS wordmark */
 #nav-wordmark {
   font-family: var(--mono);
-  font-size: 15px;
+  font-size: 19px;
   font-weight: 700;
-  letter-spacing: 5px;
+  letter-spacing: 6px;
+  line-height: 1;
   text-transform: uppercase;
   user-select: none;
   animation: wordmark-fade 6s ease-in-out infinite;
   pointer-events: none;
   white-space: nowrap;
+}
+/* The wordmark sits on the same line the pills sit on: its baseline is
+   their bottom edge. An empty inline-block's baseline is its own bottom, so
+   a strut exactly one pill tall, starting at the pills' top edge, puts the
+   text baseline on their bottom edge — whatever font ends up rendering,
+   with no per-font offset to keep in step. */
+#nav-wordmark::before {
+  content: '';
+  display: inline-block;
+  height: var(--nav-pill-h);
+  vertical-align: baseline;
 }
 @keyframes wordmark-fade {
   0%,100% {
