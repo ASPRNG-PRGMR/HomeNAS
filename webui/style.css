@@ -247,7 +247,7 @@ body {
   cursor: pointer;
   width: var(--nav-pill-h);
   height: var(--nav-pill-h);
-  font-size: 14px;
+  font-size: 15px;
   line-height: 1;
   display: flex;
   align-items: center;
@@ -290,7 +290,9 @@ body {
   background: none;
   border: none;
   border-radius: 7px;
-  color: var(--muted);
+  /* --text-dim, not --muted: an inactive tab is still a control you have to
+     find, and --muted is ~2.4:1 on the dark background. */
+  color: var(--text-dim);
   cursor: pointer;
   font-size: 12px;
   font-weight: 500;
@@ -331,23 +333,23 @@ body {
 .nav-tab[data-tab="alerts"].glow-none     { animation: glow-none     2.5s ease-in-out infinite; }
 
 @keyframes glow-critical {
-  0%,100% { box-shadow: none; color: var(--muted); }
+  0%,100% { box-shadow: none; color: var(--text-dim); }
   50%     { box-shadow: 0 0 12px rgba(224,82,82,.75);  color: var(--sev-critical); }
 }
 @keyframes glow-high {
-  0%,100% { box-shadow: none; color: var(--muted); }
+  0%,100% { box-shadow: none; color: var(--text-dim); }
   50%     { box-shadow: 0 0 12px rgba(224,125,42,.75); color: var(--sev-high); }
 }
 @keyframes glow-medium {
-  0%,100% { box-shadow: none; color: var(--muted); }
+  0%,100% { box-shadow: none; color: var(--text-dim); }
   50%     { box-shadow: 0 0 12px rgba(201,187,58,.75); color: var(--sev-medium); }
 }
 @keyframes glow-low {
-  0%,100% { box-shadow: none; color: var(--muted); }
+  0%,100% { box-shadow: none; color: var(--text-dim); }
   50%     { box-shadow: 0 0 10px rgba(76,175,125,.65); color: var(--sev-low); }
 }
 @keyframes glow-none {
-  0%,100% { box-shadow: none; color: var(--muted); }
+  0%,100% { box-shadow: none; color: var(--text-dim); }
   50%     { box-shadow: 0 0 8px rgba(76,175,125,.4);   color: var(--sev-low); }
 }
 
@@ -420,7 +422,7 @@ body {
 #path-home, #path-back {
   background: none;
   border: none;
-  color: var(--muted);
+  color: var(--text-dim);
   cursor: pointer;
   font-size: 14px;
   padding: 0 4px;
@@ -457,8 +459,8 @@ body {
   margin: 0 -4px; /* cancel padding from layout */
 }
 #path-pill .crumb:hover { color: var(--accent); }
-#path-pill .sep { color: var(--border); }
-#path-pill .crumb.active { color: var(--muted); cursor: default; }
+#path-pill .sep { color: var(--muted); }
+#path-pill .crumb.active { color: var(--text-soft); cursor: default; }
 
 /* Drop target state — crumb in path bar being hovered during a drag */
 #path-pill .crumb.crumb-drop-target,
@@ -479,7 +481,7 @@ body {
   border-radius: 50%;
   background: var(--surface2);
   border: 1.5px solid var(--border-strong);
-  color: var(--muted);
+  color: var(--text-dim);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -828,9 +830,10 @@ main#file-list {
 }
 /* Dimming is per button, not on the container: opacity on the container caps
    every child, which is what kept the download button at 28% along with the
-   rest. Rename and delete still recede until the row is hovered; download
-   (below) does not. */
-.file-actions button { opacity: 0.28; }
+   rest. Rename and delete still step back a little until the row is hovered
+   — enough to keep the list calm, not so much that you have to hunt for
+   them (28% was, in both themes); download (below) does not dim at all. */
+.file-actions button { opacity: 0.62; }
 .file-row:hover .file-actions button,
 .file-actions button:focus-visible { opacity: 1; }
 
@@ -887,7 +890,9 @@ main#file-list {
 
 /* Drag handle — four braille dots, always occupies space, only visible on hover */
 .drag-handle {
-  color: var(--border);
+  /* Was var(--border): the same colour as the row's own divider line, i.e.
+     invisible until hover — and there is no hover on a touch screen. */
+  color: var(--muted);
   cursor: grab;
   font-size: 16px;
   line-height: 1;
@@ -898,7 +903,7 @@ main#file-list {
   /* always visible slot so layout doesn't shift */
 }
 .file-row:hover .drag-handle {
-  color: var(--muted);
+  color: var(--text-dim);
 }
 .drag-handle:hover {
   color: var(--text) !important;
