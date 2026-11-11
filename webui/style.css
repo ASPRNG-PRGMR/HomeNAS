@@ -797,10 +797,15 @@ main#file-list {
   display: flex;
   gap: 4px;
   justify-content: flex-end;
-  opacity: 0.28;
-  transition: opacity .15s;
+  align-items: center;
 }
-.file-row:hover .file-actions { opacity: 1; }
+/* Dimming is per button, not on the container: opacity on the container caps
+   every child, which is what kept the download button at 28% along with the
+   rest. Rename and delete still recede until the row is hovered; download
+   (below) does not. */
+.file-actions button { opacity: 0.28; }
+.file-row:hover .file-actions button,
+.file-actions button:focus-visible { opacity: 1; }
 
 /* Action button CSS tooltips */
 .file-actions button {
@@ -811,9 +816,13 @@ main#file-list {
   font-size: 14px;
   line-height: 1;
   padding: 3px 5px;
-  transition: background .12s, transform .1s;
+  transition: background .12s, transform .1s, opacity .15s, color .12s;
   position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
+.file-actions button svg { display: block; pointer-events: none; }
 .file-actions button::after {
   content: attr(title);
   position: absolute;
@@ -835,8 +844,15 @@ main#file-list {
 }
 .file-actions button:hover::after { opacity: 1; }
 .file-actions button:active { transform: scale(.88); }
-.file-actions .dl-btn  { color: var(--link-dim); }
-.file-actions .dl-btn:hover  { background: rgba(79,127,255,.12); color: var(--accent); }
+/* Download is the one action people look for on every row, so it stays
+   legible at rest: accent-coloured on a faint accent chip, never dimmed. */
+.file-actions .dl-btn {
+  color: var(--accent);
+  background: var(--accent-faint);
+  opacity: 1;
+  padding: 4px 6px;
+}
+.file-actions .dl-btn:hover  { background: var(--accent-soft); }
 .file-actions .ren-btn { color: var(--rename); }
 .file-actions .ren-btn:hover { background: var(--rename-bg); }
 .file-actions .del-btn { color: var(--danger); }

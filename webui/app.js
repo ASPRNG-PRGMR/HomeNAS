@@ -202,9 +202,9 @@ function renderFileList(items) {
         <div class="file-size">${size}</div>
         <div class="file-date">${modified}</div>
         <div class="file-actions">
-          ${!item.is_dir ? `<button class="dl-btn">↓</button>` : ''}
-          <button class="ren-btn">✎</button>
-          <button class="del del-btn">✕</button>
+          ${!item.is_dir ? `<button class="dl-btn" aria-label="Download">${ICON_DOWNLOAD}</button>` : ''}
+          <button class="ren-btn" aria-label="Rename">✎</button>
+          <button class="del del-btn" aria-label="Delete">${ICON_TRASH}</button>
           <div class="drag-handle" title="Drag to move">⠿</div>
         </div>
       </div>`;
@@ -343,6 +343,14 @@ let _dragViaHandle = false;
 document.getElementById('file-list').addEventListener('mousedown', e => {
   _dragViaHandle = !!e.target.closest('.drag-handle');
 });
+
+// ── row action icons ──────────────────────────────────────────────────────────
+// Inline SVG rather than text glyphs: "↓" and "✕" render at whatever weight
+// the fallback font happens to have, which is how the download arrow ended up
+// a hairline. These stroke in currentColor, so the button's colour rules in
+// style.css still drive them in both themes.
+const ICON_DOWNLOAD = `<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2.5v7.5"/><path d="M4.75 7 8 10.25 11.25 7"/><path d="M2.75 11v1.5a1 1 0 0 0 1 1h8.5a1 1 0 0 0 1-1V11"/></svg>`;
+const ICON_TRASH = `<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.75 4.25h10.5"/><path d="M6.25 4.25V3a.75.75 0 0 1 .75-.75h2a.75.75 0 0 1 .75.75v1.25"/><path d="M4 4.25l.6 8.35a1 1 0 0 0 1 .9h4.8a1 1 0 0 0 1-.9l.6-8.35"/><path d="M6.75 6.75v4M9.25 6.75v4"/></svg>`;
 
 // ── download ──────────────────────────────────────────────────────────────────
 function downloadFile(path, name) {
