@@ -617,7 +617,10 @@ function askFolderDrop(srcName, destName) {
     overlay.id = 'move-overlay';
     overlay.innerHTML = `
       <div class="modal move-modal" role="dialog" aria-modal="true" aria-labelledby="move-title">
-        <p id="move-title">Move “${escHtml(srcName)}” into “${escHtml(destName)}”?</p>
+        <div class="move-head">
+          <p id="move-title">Move “${escHtml(srcName)}” into “${escHtml(destName)}”?</p>
+          <button type="button" class="move-esc" data-choice="" aria-label="Close without moving (Esc)">Esc</button>
+        </div>
         <button type="button" class="move-choice" data-choice="inside">
           <span class="move-choice-title">Put it inside</span>
           <span class="move-choice-desc">“${escHtml(srcName)}” becomes a subfolder of “${escHtml(destName)}”.</span>
@@ -626,7 +629,6 @@ function askFolderDrop(srcName, destName) {
           <span class="move-choice-title">Merge contents</span>
           <span class="move-choice-desc">Everything in “${escHtml(srcName)}” moves into “${escHtml(destName)}”, then “${escHtml(srcName)}” is removed. Nothing is overwritten. Can’t be undone.</span>
         </button>
-        <div class="modal-btns"><button type="button" data-choice="">Cancel</button></div>
         <p class="move-oops">Didn’t mean to do this? Press <kbd>Esc</kbd>, then hold <kbd>Shift</kbd> while dragging to rearrange instead.</p>
       </div>`;
 
@@ -645,9 +647,9 @@ function askFolderDrop(srcName, destName) {
     });
     document.addEventListener('keydown', onKey, true);
     document.body.appendChild(overlay);
-    // Focus starts on Cancel: a stray Enter or Space after an accidental
-    // drop must not move anything.
-    overlay.querySelector('.modal-btns button').focus();
+    // Focus starts on the Esc button, not on a choice: a stray Enter or
+    // Space after an accidental drop must close this, not move anything.
+    overlay.querySelector('.move-esc').focus();
   });
 }
 
