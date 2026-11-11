@@ -272,6 +272,51 @@ run_smoke() {
     check "delete file"              "200" "$(api DELETE '/api/file?path=smoke_b/renamed.txt')"
     check "delete directory"         "200" "$(api DELETE '/api/file?path=smoke_a')"
 
+    say "Move safety, merge and manual order"
+    mk()  { json POST /api/mkdir "{\"path\":\"$1\"}" >/dev/null; }
+    put() { printf '%s' "$2" > "$SB/put.tmp"; api POST "/api/upload?path=$1" -F "file=@$SB/put.tmp;filename=$3" >/dev/null; }
+    mk m_src; mk m_src/sub; mk m_dst; mk m_dst/sub
+    put m_src       "from-src" same.txt
+    put m_dst       "from-dst" same.txt
+    put m_src       "only-src" only.txt
+    put m_src/sub   "nested"   deep.txt
+    check "move refuses to overwrite an existing file (409)" "409" \
+        "$(json POST /api/rename '{"from":"m_src/same.txt","to":"m_dst/same.txt"}')"
+    check "the file it would have overwritten is intact" "from-dst" "$(api GET '/api/file?path=m_dst/same.txt')"
+    check "merge rejects a folder into itself"          "400" "$(json POST /api/merge '{"from":"m_src","to":"m_src"}')"
+    check "merge rejects a folder into its own subfolder" "400" "$(json POST /api/merge '{"from":"m_src","to":"m_src/sub"}')"
+    check "merge rejects the storage root as source"    "400" "$(json POST /api/merge '{"from":"/","to":"m_dst"}')"
+    check "merge rejects a path outside the root"       "403" "$(json POST /api/merge '{"from":"../../etc","to":"m_dst"}')"
+    out="$(json POST /api/merge '{"from":"m_src","to":"m_dst"}')"
+    check "merge succeeds"                              '"ok":true' "$out"
+    check "merge reports the conflict it renamed"       '"as":"same (2).txt"' "$out"
+    [ ! -e "$NAS_ROOT/m_src" ] && ok "merged source folder is removed" || bad "merged source folder is removed" "$(ls -R "$NAS_ROOT/m_src")"
+    check "merge kept the destination's file"           "from-dst" "$(cat "$NAS_ROOT/m_dst/same.txt" 2>&1)"
+    check "merge kept the incoming file under a new name" "from-src" "$(cat "$NAS_ROOT/m_dst/same (2).txt" 2>&1)"
+    check "merge moved a non-conflicting file"          "only-src" "$(cat "$NAS_ROOT/m_dst/only.txt" 2>&1)"
+    check "merge folded same-named subfolders together" "nested"   "$(cat "$NAS_ROOT/m_dst/sub/deep.txt" 2>&1)"
+    # Dissolving a folder into its parent, where a child shares the folder's name.
+    mk m_up; mk m_up/m_up; put m_up/m_up "inner" x.txt
+    check "merge a folder up into its parent"           '"ok":true' "$(json POST /api/merge '{"from":"m_up","to":"/"}')"
+    check "…its same-named child survives intact"       "inner" "$(cat "$NAS_ROOT/m_up (2)/x.txt" 2>&1)"
+
+    check "ls reports an empty order by default"        '"order":[]' "$(api GET '/api/ls?path=m_dst')"
+    check "save a manual order"                         "200" \
+        "$(json POST /api/order '{"path":"m_dst","order":["only.txt","sub","same.txt"]}')"
+    check "ls returns the saved order"                  '"order":["only.txt","sub","same.txt"]' "$(api GET '/api/ls?path=m_dst')"
+    check "order rejects names that look like paths"    "400" \
+        "$(json POST /api/order '{"path":"m_dst","order":["../x"]}')"
+    json POST /api/rename '{"from":"m_dst/only.txt","to":"m_dst/first.txt"}' >/dev/null
+    check "a rename keeps its slot in the order"        '"order":["first.txt","sub","same.txt"]' "$(api GET '/api/ls?path=m_dst')"
+    json POST /api/rename '{"from":"m_dst","to":"m_moved"}' >/dev/null
+    check "a moved folder keeps its order"              '"order":["first.txt","sub","same.txt"]' "$(api GET '/api/ls?path=m_moved')"
+    api DELETE '/api/file?path=m_moved/sub' >/dev/null
+    check "a deleted entry leaves the order"            '"order":["first.txt","same.txt"]' "$(api GET '/api/ls?path=m_moved')"
+    check "an empty list clears the order"              "200" "$(json POST /api/order '{"path":"m_moved","order":[]}')"
+    check "ls reports no order after clearing"          '"order":[]' "$(api GET '/api/ls?path=m_moved')"
+    check "the order file stays out of listings"        '"Documents"' "$(api GET '/api/ls?path=/')"
+    if [[ "$(api GET '/api/ls?path=/')" == *".nas-meta"* ]]; then bad ".nas-meta is hidden" "listed"; else ok ".nas-meta is hidden"; fi
+
     say "Audit log and detection"
     sleep 1.5   # EventWriter flushes every 250ms; the analyzer runs after each flush
     out="$(api GET '/api/events?limit=100')"

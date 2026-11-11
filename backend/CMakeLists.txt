@@ -27,6 +27,7 @@ add_executable(
     services/EventAnalyzer.cpp
     controllers/SyncController.cpp
     services/SyncManager.cpp
+    services/OrderStore.cpp
 )
 
 # OpenSSL is linked explicitly, unlike SQLite3 above. Drogon pulls it in for

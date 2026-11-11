@@ -9,6 +9,8 @@ public:
         ADD_METHOD_TO(FilesystemController::remove, "/api/file",   drogon::Delete, "JwtFilter");
         ADD_METHOD_TO(FilesystemController::mkdir,  "/api/mkdir",  drogon::Post,   "JwtFilter");
         ADD_METHOD_TO(FilesystemController::rename, "/api/rename", drogon::Post,   "JwtFilter");
+        ADD_METHOD_TO(FilesystemController::merge,  "/api/merge",  drogon::Post,   "JwtFilter");
+        ADD_METHOD_TO(FilesystemController::order,  "/api/order",  drogon::Post,   "JwtFilter");
     METHOD_LIST_END
 
     void list(const drogon::HttpRequestPtr &req,
@@ -25,6 +27,15 @@ public:
 
     void rename(const drogon::HttpRequestPtr &req,
                 std::function<void(const drogon::HttpResponsePtr &)> &&callback);
+
+    // Move everything inside one directory into another, then remove the
+    // emptied source. Never overwrites: see the handler for conflict rules.
+    void merge(const drogon::HttpRequestPtr &req,
+               std::function<void(const drogon::HttpResponsePtr &)> &&callback);
+
+    // Save (or, with an empty list, clear) a directory's manual row order.
+    void order(const drogon::HttpRequestPtr &req,
+               std::function<void(const drogon::HttpResponsePtr &)> &&callback);
 
 private:
     // Resolve a user-supplied path against nas_root, reject traversal attempts
