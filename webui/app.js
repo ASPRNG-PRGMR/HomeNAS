@@ -147,7 +147,40 @@ async function navigate(path) {
   renderBreadcrumb(path);
   const data = await get(`/api/ls?path=${encodeURIComponent(path)}`);
   if (!data) return;
-  renderFileList(data.items || []);
+  currentOrder = Array.isArray(data.order) ? data.order : [];
+  renderFileList(orderItems(data.items || [], currentOrder));
+}
+
+// ── row order ─────────────────────────────────────────────────────────────────
+// currentOrder is the manual order saved on the server for this folder (a
+// list of names; empty = none). currentItems is what is on screen, in order.
+let currentOrder = [];
+let currentItems = [];
+
+// Folders first, then by name — unless a manual order was saved, in which
+// case its names come first in that order and anything it doesn't mention
+// (a file uploaded since) follows in the default order. The saved list is
+// only ever a hint: a stale or partial one can't hide an entry.
+function orderItems(items, order) {
+  items.sort((a, b) => {
+    if (a.is_dir !== b.is_dir) return b.is_dir - a.is_dir;
+    return a.name.localeCompare(b.name);
+  });
+  if (!order.length) return items;
+  const pos    = new Map(order.map((n, i) => [n, i]));
+  const listed = items.filter(i => pos.has(i.name))
+                      .sort((a, b) => pos.get(a.name) - pos.get(b.name));
+  return listed.concat(items.filter(i => !pos.has(i.name)));
+}
+
+async function saveOrder(names) {
+  const data = await post('/api/order', { path: currentPath, order: names });
+  if (!data || data.error) {
+    showToast(data?.error || 'Could not save the order', { error: true });
+    return false;
+  }
+  currentOrder = names;
+  return true;
 }
 
 function renderBreadcrumb(path) {
@@ -171,11 +204,7 @@ function renderBreadcrumb(path) {
 // ── file list ─────────────────────────────────────────────────────────────────
 function renderFileList(items) {
   const main = document.getElementById('file-list');
-
-  items.sort((a, b) => {
-    if (a.is_dir !== b.is_dir) return b.is_dir - a.is_dir;
-    return a.name.localeCompare(b.name);
-  });
+  currentItems = items;
 
   if (items.length === 0) {
     main.innerHTML = `<div class="empty-state">This folder is empty</div>`;
@@ -184,7 +213,11 @@ function renderFileList(items) {
 
   const header = `
     <div class="list-header">
-      <div></div><div>Name</div><div>Size</div><div>Modified</div><div></div>
+      <div></div>
+      <div>Name${currentOrder.length
+        ? ` <span class="order-note">· custom order <button id="order-reset" type="button">Reset</button></span>`
+        : ''}</div>
+      <div>Size</div><div>Modified</div><div></div>
     </div>`;
 
   const rows = items.map(item => {
@@ -237,113 +270,334 @@ function renderFileList(items) {
     });
   });
 
-  // ── drag-to-move ──────────────────────────────────────────────────────────
-  attachDragHandlers(main);
-}
-
-// Track what's being dragged — also exposed on window for path-bar drop zones
-let _dragSourcePath = null;
-let _dragSourceName = null;
-
-// Exposed so index.html inline script can call it from crumb drop handlers
-window._nasMove = async function(srcFull, destFull) {
-  await post('/api/rename', { from: srcFull, to: destFull });
-  navigate(currentPath);
-};
-
-Object.defineProperties(window, {
-  _dragSourcePath: {
-    get: () => _dragSourcePath,
-    set: v => { _dragSourcePath = v; },
-    configurable: true
-  },
-  _dragSourceName: {
-    get: () => _dragSourceName,
-    set: v => { _dragSourceName = v; },
-    configurable: true
-  }
-});
-
-function attachDragHandlers(container) {
-  const rows = container.querySelectorAll('.file-row');
-
-  rows.forEach(row => {
-    const srcPath = row.dataset.path; // relative, no leading slash
-    const srcName = row.dataset.name;
-
-    // Only allow drag to start from the handle
-    const handle = row.querySelector('.drag-handle');
-    handle.addEventListener('mousedown', () => {
-      row.setAttribute('draggable', 'true');
-    });
-
-    row.addEventListener('dragstart', e => {
-      // Bail if drag didn't originate from handle
-      if (!e.target.closest('.file-row') || !_dragViaHandle) return;
-      _dragSourcePath = srcPath;
-      _dragSourceName = srcName;
-      e.dataTransfer.effectAllowed = 'move';
-      // Minimal ghost — browser default ghost is fine, just tag it
-      e.dataTransfer.setData('text/plain', srcName);
-      setTimeout(() => row.classList.add('dragging'), 0);
-    });
-
-    row.addEventListener('dragend', () => {
-      row.classList.remove('dragging');
-      _dragSourcePath = null;
-      _dragSourceName = null;
-      _dragViaHandle  = false;
-      // Clear any lingering drop targets
-      container.querySelectorAll('.drop-target').forEach(r =>
-        r.classList.remove('drop-target'));
-    });
-
-    // Only folder rows are valid drop targets
-    if (row.dataset.dir !== 'true') return;
-
-    row.addEventListener('dragenter', e => {
-      e.preventDefault();
-      if (!_dragSourcePath || row.dataset.path === _dragSourcePath) return;
-      row.classList.add('drop-target');
-    });
-
-    row.addEventListener('dragover', e => {
-      e.preventDefault();
-      e.dataTransfer.dropEffect = 'move';
-    });
-
-    row.addEventListener('dragleave', e => {
-      // Only clear if actually leaving this row (not entering a child)
-      if (!row.contains(e.relatedTarget)) {
-        row.classList.remove('drop-target');
+  main.querySelector('#order-reset')?.addEventListener('click', async () => {
+    const previous = currentOrder;
+    if (!await saveOrder([])) return;
+    renderFileList(orderItems(currentItems, []));
+    showToast('Back to the default order', {
+      undo: async () => {
+        if (await saveOrder(previous)) renderFileList(orderItems(currentItems, previous));
       }
-    });
-
-    row.addEventListener('drop', async e => {
-      e.preventDefault();
-      row.classList.remove('drop-target');
-      const destDirPath = row.dataset.path; // relative path of folder
-
-      if (!_dragSourcePath || destDirPath === _dragSourcePath) return;
-
-      // Build the new path: destination folder + source filename
-      const srcFull  = '/' + _dragSourcePath;          // /dir/file.txt
-      const destFull = '/' + destDirPath + '/' + _dragSourceName; // /dir/subdir/file.txt
-
-      if (srcFull === destFull) return;
-
-      await post('/api/rename', { from: srcFull, to: destFull });
-      navigate(currentPath);
     });
   });
 }
 
-// Flag set only when a drag originates from the handle
-let _dragViaHandle = false;
-document.getElementById('file-list').addEventListener('mousedown', e => {
+// ── drag: rearrange, move into a folder, merge ───────────────────────────────
+//
+// One drag gesture, three outcomes, chosen by where on a row you let go:
+//
+//     top edge      → place the dragged row above this one     (rearrange)
+//     middle        → move it INTO this folder                 (folders only)
+//     bottom edge   → place it below this one                  (rearrange)
+//
+// The middle band exists only on folder rows, and only while Shift is not
+// held. On file rows — and on every row with Shift down — the whole row is
+// rearrange-only, split at its midpoint. So Shift is the "I am just
+// rearranging" key: with it held there is no position on screen that moves
+// anything into a folder. (Shift rather than Ctrl or Alt because browsers
+// reinterpret those two mid-drag as "copy" and "link", which this drag does
+// not allow, and would then refuse the drop.)
+//
+// Nothing here is silent or one-way any more: a move shows a toast with
+// Undo, and a folder dropped on a folder asks first (subfolder or merge).
+
+// What's being dragged. Also read by the path-bar drop zones in index.html.
+let _dragSourcePath  = null;
+let _dragSourceName  = null;
+let _dragSourceIsDir = false;
+// Set only when the press began on a row's drag handle.
+let _dragViaHandle   = false;
+
+Object.defineProperties(window, {
+  _dragSourcePath: { get: () => _dragSourcePath, configurable: true },
+  _dragSourceName: { get: () => _dragSourceName, configurable: true }
+});
+
+// Fraction of a folder row's height, at top and bottom, that means
+// "rearrange" rather than "move into". Adjacent rows' edge bands meet at the
+// boundary between them, so the rearrange target between two folders is
+// twice this — deliberately a bit bigger than the move-into band.
+const EDGE_BAND = 0.28;
+
+const fileListEl = document.getElementById('file-list');
+
+fileListEl.addEventListener('mousedown', e => {
   _dragViaHandle = !!e.target.closest('.drag-handle');
 });
 
+fileListEl.addEventListener('dragstart', e => {
+  const row = e.target.closest?.('.file-row');
+  // Rows are draggable only by the handle. Without this a drag begun
+  // anywhere else on the row would still start, carrying nothing.
+  if (!row || !_dragViaHandle) { e.preventDefault(); return; }
+  _dragSourcePath  = row.dataset.path;
+  _dragSourceName  = row.dataset.name;
+  _dragSourceIsDir = row.dataset.dir === 'true';
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', _dragSourceName);
+  setTimeout(() => row.classList.add('dragging'), 0);
+  setDragHint(e.shiftKey);
+});
+
+fileListEl.addEventListener('dragend', () => {
+  fileListEl.querySelector('.file-row.dragging')?.classList.remove('dragging');
+  _dragSourcePath = _dragSourceName = null;
+  _dragSourceIsDir = false;
+  _dragViaHandle   = false;
+  clearDropMarks();
+  setDragHint(null);
+});
+
+function clearDropMarks() {
+  fileListEl.querySelectorAll('.drop-target, .drop-before, .drop-after')
+    .forEach(r => r.classList.remove('drop-target', 'drop-before', 'drop-after'));
+}
+
+// Resolve a pointer position to { row, zone } — zone is 'before', 'after'
+// or 'into' — or null when dropping there would do nothing.
+function dropIntent(e) {
+  if (!_dragSourcePath) return null;
+  const rows = [...fileListEl.querySelectorAll('.file-row')];
+  if (!rows.length) return null;
+
+  let row = e.target.closest?.('.file-row');
+  let zone;
+  if (!row) {
+    // Over the header or the empty space under the list: snap to the
+    // nearest end, so "drag it to the bottom" doesn't need pixel aim.
+    // Anywhere else that isn't a row (the gap beside one) changes nothing.
+    const first = rows[0].getBoundingClientRect();
+    const last  = rows[rows.length - 1].getBoundingClientRect();
+    if      (e.clientY < first.top)   { row = rows[0]; zone = 'before'; }
+    else if (e.clientY > last.bottom) { row = rows[rows.length - 1]; zone = 'after'; }
+    else return null;
+  } else {
+    const box = row.getBoundingClientRect();
+    const y   = (e.clientY - box.top) / box.height;
+    const canEnter = row.dataset.dir === 'true' && !e.shiftKey;
+    if (!canEnter)                 zone = y < 0.5 ? 'before' : 'after';
+    else if (y < EDGE_BAND)        zone = 'before';
+    else if (y > 1 - EDGE_BAND)    zone = 'after';
+    else                           zone = 'into';
+  }
+
+  const src = rows.findIndex(r => r.dataset.path === _dragSourcePath);
+  const dst = rows.indexOf(row);
+  if (dst === src) return null;                          // onto itself
+  // Positions that leave the row exactly where it already is.
+  if (zone === 'before' && dst === src + 1) return null;
+  if (zone === 'after'  && dst === src - 1) return null;
+  return { row, zone };
+}
+
+// Repaint the drop marker for the current pointer position. Runs on
+// dragenter as well as dragover: dragover is what tracks movement *within* a
+// row (edge vs middle), but browsers throttle it, and crossing onto a new
+// row must never leave the previous row's marker showing in the meantime.
+function trackDrag(e) {
+  if (!_dragSourcePath) return;          // a desktop file drag: upload path
+  e.preventDefault();
+  setDragHint(e.shiftKey);
+  const intent = dropIntent(e);
+  clearDropMarks();
+  if (!intent) { e.dataTransfer.dropEffect = 'none'; return; }
+  e.dataTransfer.dropEffect = 'move';
+  intent.row.classList.add(
+    intent.zone === 'into' ? 'drop-target' : 'drop-' + intent.zone);
+}
+fileListEl.addEventListener('dragover',  trackDrag);
+fileListEl.addEventListener('dragenter', trackDrag);
+
+fileListEl.addEventListener('dragleave', e => {
+  if (!fileListEl.contains(e.relatedTarget)) clearDropMarks();
+});
+
+fileListEl.addEventListener('drop', async e => {
+  if (!_dragSourcePath) return;
+  e.preventDefault();
+  const intent = dropIntent(e);
+  clearDropMarks();
+  if (!intent) return;
+
+  // dragend clears these before the awaits below resolve — take copies.
+  const src = { path: _dragSourcePath, name: _dragSourceName, isDir: _dragSourceIsDir };
+  const dst = { path: intent.row.dataset.path, name: intent.row.dataset.name };
+
+  if (intent.zone !== 'into') return rearrange(src.name, dst.name, intent.zone);
+
+  if (!src.isDir) {
+    return moveEntry('/' + src.path, '/' + dst.path + '/' + src.name, src.name, dst.name);
+  }
+  // Folder onto folder is the one that used to bite: it could mean "nest
+  // it" or "combine them", and it is the easiest drop to make by accident
+  // while rearranging. Always ask.
+  const choice = await askFolderDrop(src.name, dst.name);
+  if (choice === 'inside') {
+    await moveEntry('/' + src.path, '/' + dst.path + '/' + src.name, src.name, dst.name);
+  } else if (choice === 'merge') {
+    await mergeFolders('/' + src.path, '/' + dst.path, src.name, dst.name);
+  }
+});
+
+// ── the three outcomes ───────────────────────────────────────────────────────
+
+async function rearrange(srcName, dstName, zone) {
+  const previous = currentOrder;
+  const names = currentItems.map(i => i.name).filter(n => n !== srcName);
+  const at = names.indexOf(dstName);
+  if (at < 0) return;
+  names.splice(zone === 'before' ? at : at + 1, 0, srcName);
+
+  if (!await saveOrder(names)) return;
+  renderFileList(orderItems(currentItems, names));
+  showToast(`Moved “${srcName}” ${zone === 'before' ? 'above' : 'below'} “${dstName}”`, {
+    undo: async () => {
+      if (await saveOrder(previous)) renderFileList(orderItems(currentItems, previous));
+    }
+  });
+}
+
+// Move one entry to a new path, with Undo. Used by row drops and by the
+// path-bar drop zones.
+async function moveEntry(srcFull, destFull, name, destLabel) {
+  if (srcFull === destFull) return;
+  const where = currentPath;
+  const order = currentOrder;
+  const data  = await post('/api/rename', { from: srcFull, to: destFull });
+  if (!data) return;
+  if (data.error) {
+    showToast(`Couldn't move “${name}”: ${data.error}`, { error: true });
+    return;
+  }
+  await navigate(currentPath);
+  showToast(`Moved “${name}” into “${destLabel}”`, {
+    undo: async () => {
+      const back = await post('/api/rename', { from: destFull, to: srcFull });
+      if (!back || back.error) {
+        showToast(`Couldn't undo: ${back?.error || 'request failed'}`, { error: true });
+        return;
+      }
+      // Moving out dropped it from this folder's saved order; put the list
+      // back so it returns to the slot it left, not the end.
+      if (order.length && currentPath === where) await saveOrder(order);
+      await navigate(currentPath);
+    }
+  });
+}
+window._nasMove = (srcFull, destFull) => {
+  const name   = srcFull.substring(srcFull.lastIndexOf('/') + 1);
+  const parent = destFull.substring(0, destFull.lastIndexOf('/'));
+  return moveEntry(srcFull, destFull, name,
+                   parent ? parent.substring(parent.lastIndexOf('/') + 1) : 'Home');
+};
+
+async function mergeFolders(srcFull, destFull, srcName, destName) {
+  const data = await post('/api/merge', { from: srcFull, to: destFull });
+  if (!data) return;
+  await navigate(currentPath);
+  if (data.error) {
+    // The server stops at the first failure and leaves the rest in place.
+    const partial = data.moved ? ` ${data.moved} item(s) were moved before it stopped;` +
+                                 ` the rest are still in “${srcName}”.` : '';
+    showToast(`Couldn't merge “${srcName}”: ${data.error}.${partial}`, { error: true });
+    return;
+  }
+  const kept = (data.renamed || []).length;
+  showToast(`Merged “${srcName}” into “${destName}”` +
+            (kept ? ` — ${kept} same-named item${kept > 1 ? 's' : ''} kept as a copy` : ''));
+}
+
+// ── folder-on-folder dialog ──────────────────────────────────────────────────
+// Resolves to 'inside', 'merge' or null (cancelled).
+function askFolderDrop(srcName, destName) {
+  return new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.id = 'move-overlay';
+    overlay.innerHTML = `
+      <div class="modal move-modal" role="dialog" aria-modal="true" aria-labelledby="move-title">
+        <p id="move-title">Move “${escHtml(srcName)}” into “${escHtml(destName)}”?</p>
+        <button type="button" class="move-choice" data-choice="inside">
+          <span class="move-choice-title">Put it inside</span>
+          <span class="move-choice-desc">“${escHtml(srcName)}” becomes a subfolder of “${escHtml(destName)}”.</span>
+        </button>
+        <button type="button" class="move-choice" data-choice="merge">
+          <span class="move-choice-title">Merge contents</span>
+          <span class="move-choice-desc">Everything in “${escHtml(srcName)}” moves into “${escHtml(destName)}”, then “${escHtml(srcName)}” is removed. Nothing is overwritten. Can’t be undone.</span>
+        </button>
+        <div class="modal-btns"><button type="button" data-choice="">Cancel</button></div>
+        <p class="move-oops">Didn’t mean to do this? Press <kbd>Esc</kbd>, then hold <kbd>Shift</kbd> while dragging to rearrange instead.</p>
+      </div>`;
+
+    const finish = choice => {
+      document.removeEventListener('keydown', onKey, true);
+      overlay.remove();
+      resolve(choice || null);
+    };
+    const onKey = e => {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(null); }
+    };
+    overlay.addEventListener('click', e => {
+      if (e.target === overlay) return finish(null);        // click on the scrim
+      const btn = e.target.closest('[data-choice]');
+      if (btn) finish(btn.dataset.choice);
+    });
+    document.addEventListener('keydown', onKey, true);
+    document.body.appendChild(overlay);
+    // Focus starts on Cancel: a stray Enter or Space after an accidental
+    // drop must not move anything.
+    overlay.querySelector('.modal-btns button').focus();
+  });
+}
+
+// ── drag hint ────────────────────────────────────────────────────────────────
+// A one-line legend shown only while a row is being dragged. Pass null to
+// hide it, otherwise whether Shift is currently held.
+function setDragHint(shift) {
+  let el = document.getElementById('drag-hint');
+  if (shift === null) { el?.remove(); return; }
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'drag-hint';
+    document.body.appendChild(el);
+  }
+  const mode = shift ? 'shift' : 'normal';
+  if (el.dataset.mode === mode) return;
+  el.dataset.mode = mode;
+  el.innerHTML = shift
+    ? `<b>Rearranging only</b> — drops can’t go into a folder while <kbd>Shift</kbd> is held`
+    : `Drop <b>between</b> rows to rearrange · <b>on</b> a folder to move into it · hold <kbd>Shift</kbd> to only rearrange`;
+}
+
+// ── toast ────────────────────────────────────────────────────────────────────
+// One at a time; a new one replaces the last. opts.undo adds an Undo button,
+// opts.error styles it as a failure and keeps it up a little longer.
+let _toastTimer = null;
+function showToast(message, opts = {}) {
+  document.getElementById('toast')?.remove();
+  clearTimeout(_toastTimer);
+
+  const el = document.createElement('div');
+  el.id = 'toast';
+  el.setAttribute('role', opts.error ? 'alert' : 'status');
+  if (opts.error) el.classList.add('error');
+  const text = document.createElement('span');
+  text.textContent = message;
+  el.appendChild(text);
+
+  if (opts.undo) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = 'Undo';
+    btn.addEventListener('click', async () => {
+      el.remove();
+      clearTimeout(_toastTimer);
+      await opts.undo();
+    });
+    el.appendChild(btn);
+  }
+  document.body.appendChild(el);
+  _toastTimer = setTimeout(() => el.remove(), opts.error ? 9000 : opts.undo ? 8000 : 4000);
+}
 // ── row action icons ──────────────────────────────────────────────────────────
 // Inline SVG rather than text glyphs: "↓" and "✕" render at whatever weight
 // the fallback font happens to have, which is how the download arrow ended up
@@ -376,18 +630,23 @@ const appShell    = document.getElementById('auth-shell');
 const dropOverlay = document.getElementById('drop-overlay');
 let dragCounter   = 0;
 
+// These are for files dragged in from the desktop. A row being dragged
+// within the list (_dragSourcePath set) is not an upload and must not raise
+// the "drop to upload" overlay or throw its enter/leave count off.
 appShell.addEventListener('dragenter', e => {
-  if (activeTab !== 'files') return;
+  if (activeTab !== 'files' || _dragSourcePath) return;
   e.preventDefault(); dragCounter++;
   dropOverlay.classList.remove('hidden');
 });
 appShell.addEventListener('dragleave', () => {
-  dragCounter--;
+  if (_dragSourcePath) return;
+  dragCounter = Math.max(0, dragCounter - 1);
   if (dragCounter === 0) dropOverlay.classList.add('hidden');
 });
 appShell.addEventListener('dragover', e => e.preventDefault());
 appShell.addEventListener('drop', e => {
   if (activeTab !== 'files') return;
+  if (_dragSourcePath) { e.preventDefault(); return; }
   e.preventDefault(); dragCounter = 0;
   dropOverlay.classList.add('hidden');
   uploadFiles(e.dataTransfer.files);

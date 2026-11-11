@@ -881,9 +881,11 @@ main#file-list {
 .drag-handle:active { cursor: grabbing; }
 
 /* Row being dragged */
+/* No pointer-events:none here: the row has to keep receiving dragover so
+   that hovering its own slot registers as "no change" and clears the marker
+   left on whichever row the pointer came from. */
 .file-row.dragging {
   opacity: .35;
-  pointer-events: none;
 }
 
 /* Folder row being hovered over as a valid drop target */
@@ -895,6 +897,139 @@ main#file-list {
 }
 .file-row.drop-target .file-name {
   color: var(--accent);
+}
+
+/* Rearranging: a line on the edge the row will land against. Drawn as a
+   shadow so it takes no space and the list doesn't jitter under the cursor. */
+.file-row.drop-before { box-shadow: 0 -1px 0 var(--accent), inset 0 1px 0 var(--accent); }
+.file-row.drop-after  { box-shadow: 0 1px 0 var(--accent), inset 0 -1px 0 var(--accent); }
+.file-row.drop-before, .file-row.drop-after { border-bottom-color: transparent; }
+
+/* "· custom order  Reset" beside the Name column heading */
+.order-note { text-transform: none; letter-spacing: 0; opacity: .9; }
+.order-note button {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  padding: 0 2px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* Legend shown while a row is being dragged */
+#drag-hint {
+  position: fixed;
+  left: 50%;
+  bottom: 22px;
+  transform: translateX(-50%);
+  z-index: 150;
+  pointer-events: none;           /* never a drop target itself */
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  box-shadow: 0 6px 24px rgba(0,0,0,.28);
+  color: var(--text);
+  font-size: 12px;
+  padding: 7px 16px;
+  white-space: nowrap;
+  max-width: calc(100vw - 24px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#drag-hint[data-mode="shift"] { border-color: var(--accent); }
+#drag-hint b { font-weight: 600; }
+#drag-hint kbd, .move-oops kbd {
+  background: var(--hover-1);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font: 11px var(--mono);
+  padding: 1px 5px;
+}
+
+/* Toast (move / rearrange confirmation with Undo, and errors) */
+#toast {
+  position: fixed;
+  left: 50%;
+  bottom: 22px;
+  transform: translateX(-50%);
+  z-index: 210;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 28px rgba(0,0,0,.32);
+  color: var(--text);
+  font-size: 13px;
+  padding: 10px 14px 10px 16px;
+  max-width: min(560px, calc(100vw - 24px));
+}
+#toast.error { border-color: var(--danger); }
+#toast.error span { color: var(--danger); }
+#toast button {
+  background: var(--accent-faint);
+  border: none;
+  border-radius: 6px;
+  color: var(--accent);
+  cursor: pointer;
+  flex: none;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 5px 12px;
+}
+#toast button:hover { background: var(--accent-soft); }
+
+/* Folder-dropped-on-folder dialog */
+#move-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--scrim);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+  padding: 16px;
+}
+.move-modal { width: 420px; max-width: 100%; gap: 10px; }
+#move-title { font-size: 15px; font-weight: 500; margin-bottom: 4px; overflow-wrap: anywhere; }
+.move-choice {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 11px 14px;
+  text-align: left;
+  transition: border-color .12s, background .12s;
+}
+.move-choice:hover, .move-choice:focus-visible {
+  background: var(--accent-fainter);
+  border-color: var(--accent);
+  outline: none;
+}
+.move-choice-title { font-size: 14px; font-weight: 500; }
+.move-choice-desc  { color: var(--muted); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+.move-modal .modal-btns { margin-top: 4px; }
+/* Sole button here is Cancel — undo the "last button is primary" rule. */
+.move-modal .modal-btns button:last-child {
+  background: none;
+  border-color: var(--border);
+  color: var(--text);
+}
+.move-modal .modal-btns button:focus-visible { border-color: var(--accent); outline: none; }
+.move-oops {
+  border-top: 1px solid var(--border);
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.5;
+  margin-top: 4px;
+  padding-top: 12px;
 }
 
 .empty-state {
