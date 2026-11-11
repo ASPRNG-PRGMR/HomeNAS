@@ -53,7 +53,7 @@ HomeNAS/
 ├── backend/
 │   ├── controllers/
 │   │   ├── AuthController.h/cpp        — login, logout, JWT generation/validation
-│   │   ├── FilesystemController.h/cpp  — list, download, delete, mkdir, rename/move
+│   │   ├── FilesystemController.h/cpp  — list, download, delete, mkdir, rename/move, merge, row order
 │   │   ├── UploadController.h/cpp      — multipart file upload
 │   │   ├── EventsController.h/cpp      — GET /api/events (audit log query API)
 │   │   ├── AlertsController.h/cpp      — GET /api/alerts, PATCH /api/alerts/:id/status
@@ -68,7 +68,8 @@ HomeNAS/
 │   │   ├── AlertWriter.h/cpp           — alert persistence and DB migration management
 │   │   ├── EventAnalyzer.h/cpp         — 17 detection rules, post-flush analysis
 │   │   ├── SyncTypes.h                 — SyncState enum, SyncStatus, SyncLogEntry
-│   │   └── SyncManager.h/cpp           — background hashing + one-way backup engine
+│   │   ├── SyncManager.h/cpp           — background hashing + one-way backup engine
+│   │   └── OrderStore.h/cpp            — saved manual row order for directory listings
 │   ├── db/
 │   │   ├── schema_events.sql           — events table reference schema
 │   │   └── schema_alerts.sql           — alerts table and migration reference
@@ -165,7 +166,13 @@ Four tabs, always accessible from the same browser session as the file manager:
 - **Alerts** — full alert list with severity/rule/status/date filters, inline expand showing evidence JSON, status action buttons (Mark Investigating / Dismiss / Reopen), and a ±10 minute investigation timeline showing all related events before and after the alert fired.
 - **Rules** — read-only reference view of every detection rule (BF, MD, PT, DX) grouped by family, with condition, time window, and severity for each — a quick way to check what triggers an alert without reading source.
 - **Events** — full event log with type/result/user/date filters, inline expand showing every field including target path, secondary path, bytes transferred, and failure reason.
-- **Files** — the NAS file manager. Drag the `⠿` handle on any row to move it into another folder in the current directory, or drag it onto a breadcrumb segment in the path pill to move it up to a parent directory. Moves are recorded as `file.move` events and trigger mass-delete detection rules the same as any other deletion-class action.
+- **Files** — the NAS file manager. Drag a row by its `⠿` handle:
+  - **Drop on the top or bottom edge of a row** to rearrange. An insertion line shows where it will land. The order is saved on the server (per folder, shared by every device) and `Reset` in the list header returns to folders-first, A–Z.
+  - **Drop on the middle of a folder** to move into it. A file moves straight in. A folder asks first: *Put it inside* (it becomes a subfolder) or *Merge contents* (everything in it moves into the target and the emptied folder is removed; same-named subfolders are combined, and any other name clash keeps both, the incoming one as `name (2).ext`).
+  - **Hold `Shift` while dragging** to rearrange only — with it held, no drop position moves anything into a folder.
+  - **Drop on a breadcrumb segment** in the path pill to move it up to a parent directory.
+
+  Moves and rearrangements show a toast with **Undo**; a merge can't be undone. A move never overwrites: if the destination already has an item of that name it is refused. Moves are recorded as `file.move` events (a merge as one event, not one per file) and count toward the mass-delete detection rules.
 
 The dashboard polls every 15 seconds. The alert badge on the Alerts tab shows the live open alert count.
 
@@ -197,10 +204,11 @@ The sync portal is served by NGINX as static content under `/sync/` on the main 
 ~/nas/nas_storage/.nas-meta/
 ├── events.db    — append-only event log (never deleted)
 ├── alerts.db    — alert log (status mutable, records never deleted)
-└── sync.db      — backup run history + durable sync log
+├── sync.db      — backup run history + durable sync log
+└── order.json   — manual row order per folder (UI preference, not audited)
 ```
 
-Both databases are hidden from the NAS file browser. Back them up separately if the audit trail matters independently of the file data.
+All of these are hidden from the NAS file browser. Back them up separately if the audit trail matters independently of the file data.
 
 ---
 
@@ -217,11 +225,13 @@ All endpoints require `Authorization: Bearer <token>` except `/api/auth/login`.
 ### Filesystem
 | Method | Endpoint | Description |
 |---|---|---|
-| GET | `/api/ls?path=` | List directory |
+| GET | `/api/ls?path=` | List directory. `order` holds the saved manual order, if any |
 | GET | `/api/file?path=` | Download file |
 | DELETE | `/api/file?path=` | Delete file or directory |
 | POST | `/api/mkdir` | Create directory |
-| POST | `/api/rename` | Rename or move |
+| POST | `/api/rename` | Rename or move. `409` if the destination already exists |
+| POST | `/api/merge` | Move the contents of folder `from` into folder `to`, then remove `from`. Never overwrites |
+| POST | `/api/order` | Save a folder's manual row order (`path`, `order: [names]`); an empty list clears it |
 | POST | `/api/upload?path=` | Upload files (multipart) |
 
 ### Events
