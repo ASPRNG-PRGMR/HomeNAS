@@ -24,13 +24,15 @@
 #   PORT=9000 ./test.sh           Use a specific port (default: 8080 if free,
 #                                 otherwise a random free one).
 #   PRIVATE_DROGON=1 ./test.sh    Ignore a system Drogon; use the cached build.
+#   HOMENAS_TEST_CACHE=/path      Where the build cache lives (CI points its
+#                                 cache action here).
 
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Per-user and persistent across runs: holds the Drogon build and the backend
 # build tree, so only the first run is slow. The sandbox itself is random.
-CACHE="/tmp/homenas-test-cache-$(id -u)"
+CACHE="${HOMENAS_TEST_CACHE:-/tmp/homenas-test-cache-$(id -u)}"
 SANDBOX_GLOB="/tmp/homenas-test.*"
 
 MODE=run
@@ -40,7 +42,7 @@ for arg in "$@"; do
         --smoke)   MODE=smoke ;;
         --keep)    KEEP=1 ;;
         --clean)   MODE=clean ;;
-        --help|-h) sed -n '2,28p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        --help|-h) sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "Unknown option: $arg (try --help)" >&2; exit 1 ;;
     esac
 done

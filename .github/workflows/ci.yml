@@ -1,0 +1,88 @@
+name: CI
+
+# Builds the backend and runs the same sandboxed smoke test you run locally
+# (./test.sh --smoke): the real binary, started in a throwaway /tmp
+# directory, exercised over HTTP. Nothing is deployed from here — HomeNAS is
+# installed by hand on the machine that hosts it (setup.sh), so there is no
+# delivery step to automate.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A newer push to the same branch or PR makes the older run pointless.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Scripts and web UI parse
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Shell scripts parse
+        run: |
+          for f in setup.sh build_deploy.sh test.sh check_file-op-curl.sh; do
+            bash -n "$f"
+          done
+
+      - name: JavaScript parses
+        run: |
+          for f in webui/app.js sync-portal/app.js; do
+            node --check "$f"
+          done
+
+      - name: Config files are valid JSON
+        run: |
+          for f in config.json backend/config.json; do
+            python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$f"
+          done
+
+  smoke:
+    name: Build and smoke test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      HOMENAS_TEST_CACHE: /tmp/homenas-ci-cache
+      # Always the Drogon build in the cache below, never one that happens
+      # to be on the runner image.
+      PRIVATE_DROGON: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build g++ git curl python3 rsync \
+            libjsoncpp-dev uuid-dev libssl-dev zlib1g-dev libsqlite3-dev
+
+      # Drogon takes a few minutes to compile and changes far less often
+      # than this repo. test.sh builds it only when the cached prefix is
+      # missing. Bump the "v1" to force a rebuild against current upstream.
+      - name: Cache Drogon
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.HOMENAS_TEST_CACHE }}/drogon-prefix
+          key: drogon-v1-${{ runner.os }}-ubuntu24.04
+
+      - name: Build and run the smoke test
+        run: ./test.sh --smoke --keep
+
+      - name: Show the backend log
+        if: failure()
+        run: |
+          shopt -s nullglob
+          for log in /tmp/homenas-test.*/backend.log; do
+            echo "::group::$log"
+            cat "$log"
+            echo "::endgroup::"
+          done
